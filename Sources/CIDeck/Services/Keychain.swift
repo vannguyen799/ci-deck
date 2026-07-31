@@ -1,13 +1,14 @@
 import Foundation
 import Security
 
-/// Thin wrapper over the macOS Keychain for the single secret this app stores:
-/// the GitHub personal access token.
+/// Thin wrapper over the macOS Keychain. Each GitHub account gets its own item.
 enum Keychain {
     static let service = "com.vt.cideck.github-token"
-    static let account = "default"
+    static let legacyAccount = "default"
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var tokenCache: [String: String] = [:]
 
-    static func save(_ token: String) throws {
+    static func save(_ token: String, account: String) throws {
         let data = Data(token.utf8)
 
         // Update first; SecItemAdd would fail with errSecDuplicateItem otherwise.
@@ -18,7 +19,10 @@ enum Keychain {
         ]
         let updateStatus = SecItemUpdate(query as CFDictionary,
                                          [kSecValueData as String: data] as CFDictionary)
-        if updateStatus == errSecSuccess { return }
+        if updateStatus == errSecSuccess {
+            cache(token, for: account)
+            return
+        }
         if updateStatus != errSecItemNotFound { throw KeychainError(status: updateStatus) }
 
         var insert = query
@@ -26,9 +30,15 @@ enum Keychain {
         insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         let addStatus = SecItemAdd(insert as CFDictionary, nil)
         guard addStatus == errSecSuccess else { throw KeychainError(status: addStatus) }
+        cache(token, for: account)
     }
 
-    static func read() -> String? {
+    static func read(account: String) -> String? {
+        cacheLock.lock()
+        let cached = tokenCache[account]
+        cacheLock.unlock()
+        if let cached { return cached }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -41,18 +51,29 @@ enum Keychain {
               let data = item as? Data,
               let token = String(data: data, encoding: .utf8)
         else { return nil }
-        return token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        cache(trimmed, for: account)
+        return trimmed
     }
 
     @discardableResult
-    static func delete() -> Bool {
+    static func delete(account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         let status = SecItemDelete(query as CFDictionary)
+        cacheLock.lock()
+        tokenCache.removeValue(forKey: account)
+        cacheLock.unlock()
         return status == errSecSuccess || status == errSecItemNotFound
+    }
+
+    private static func cache(_ token: String, for account: String) {
+        cacheLock.lock()
+        tokenCache[account] = token
+        cacheLock.unlock()
     }
 }
 

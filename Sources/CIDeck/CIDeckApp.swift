@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Belt and braces: LSUIElement already does this for the bundled app, but
         // `swift run` builds have no Info.plist to read it from.
         NSApp.setActivationPolicy(.accessory)
+        _ = NotificationService.shared
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }

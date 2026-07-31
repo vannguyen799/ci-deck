@@ -11,6 +11,23 @@ struct GHUser: Codable, Hashable, Sendable {
     let avatarUrl: String?
 }
 
+struct GHRepository: Codable, Hashable, Identifiable, Sendable {
+    struct Owner: Codable, Hashable, Sendable { let login: String }
+
+    let id: Int
+    let name: String
+    let owner: Owner
+    let isPrivate: Bool
+    let archived: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, owner, archived
+        case isPrivate = "private"
+    }
+
+    var slug: String { "\(owner.login)/\(name)" }
+}
+
 struct GHCommit: Codable, Hashable, Sendable {
     let message: String?
 }
@@ -191,6 +208,8 @@ struct RunItem: Identifiable, Hashable, Sendable {
     var currentStep: String?
     /// Rough remaining seconds, derived from previous successful runs of the same workflow.
     var etaSeconds: TimeInterval?
+    /// Raw job/step tree for active runs, rendered as a compact GitHub-like pipeline.
+    var jobs: [GHJob]?
     /// When this snapshot was taken, so the ETA can keep counting down between polls.
     var fetchedAt: Date = Date()
 
@@ -203,6 +222,9 @@ struct RepoRuns: Identifiable, Sendable {
     let id: String          // "owner/name"
     var repo: RepoConfig
     var runs: [RunItem]
+    /// All watched runs returned by the latest poll, including fast runs that
+    /// already finished and may be hidden by the popover's display filters.
+    var detectedRuns: [RunItem] = []
     var error: String?
 
     var hasActive: Bool { runs.contains { $0.state.isActive } }

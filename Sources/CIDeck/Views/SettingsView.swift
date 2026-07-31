@@ -17,7 +17,7 @@ struct SettingsView: View {
                 .tabItem { Label("Chung", systemImage: "slider.horizontal.3") }
         }
         .padding(14)
-        .frame(width: 640, height: 470)
+        .frame(width: 680, height: 500)
     }
 }
 
@@ -40,24 +40,44 @@ private struct AccountSettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Personal Access Token")
+            Text("GitHub accounts")
                 .font(.headline)
 
-            Text("Token được lưu trong macOS Keychain, không ghi ra file cấu hình. "
-                 + "Fine-grained token chỉ cần quyền đọc: Actions (read) và Metadata (read). "
-                 + "Classic token thì dùng scope `repo` cho repo private, `public_repo` cho repo public.")
+            Text("Chỉ cần nhập token; CIDeck sẽ tự lấy username từ GitHub. Thêm một token cho mỗi account hoặc organization scope. Token được lưu tách biệt trong macOS Keychain; mỗi repo có thể chọn token riêng ở tab Repositories.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
-                SecureField(settings.hasToken ? "•••••••• (đã lưu)" : "ghp_… hoặc github_pat_…", text: $token)
-                    .textFieldStyle(.roundedBorder)
-                Button("Lưu & kiểm tra") { save() }
-                    .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty || status == .checking)
-                if settings.hasToken {
-                    Button("Xoá") { clear() }
+            List {
+                ForEach(settings.accounts) { account in
+                    HStack {
+                        Image(systemName: "person.crop.circle.fill")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(account.displayName).font(.system(size: 12, weight: .medium))
+                            Text("@\(account.login)").font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            settings.removeAccount(id: account.id)
+                            store.resetAndRefresh()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Xoá account và token")
+                    }
                 }
+            }
+            .listStyle(.bordered)
+            .frame(minHeight: 150)
+
+            Text("Thêm account").font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 8) {
+                SecureField("ghp_… hoặc github_pat_…", text: $token)
+                    .textFieldStyle(.roundedBorder)
+                Button("Thêm & kiểm tra") { save() }
+                    .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty || status == .checking)
             }
 
             statusLine
@@ -66,7 +86,6 @@ private struct AccountSettingsTab: View {
                  destination: URL(string: "https://github.com/settings/personal-access-tokens/new")!)
                 .font(.system(size: 11))
 
-            Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -75,11 +94,7 @@ private struct AccountSettingsTab: View {
     private var statusLine: some View {
         switch status {
         case .idle:
-            if settings.hasToken {
-                Label("Đã có token trong Keychain.", systemImage: "checkmark.seal")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
+            EmptyView()
         case .checking:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
@@ -100,30 +115,28 @@ private struct AccountSettingsTab: View {
     private func save() {
         let value = token
         status = .checking
+        let account: AccountConfig
         do {
-            try settings.saveToken(value)
+            account = try settings.addAccount(token: value)
         } catch {
             status = .failed(error.localizedDescription)
             return
         }
         Task {
             do {
-                let user = try await store.validateToken()
+                let user = try await store.validateToken(accountId: account.id)
+                var verified = account
+                verified.login = user.login
+                try settings.updateAccount(verified)
                 status = .ok(user.login)
                 token = ""
                 store.resetAndRefresh()
             } catch {
+                settings.removeAccount(id: account.id)
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 status = .failed(message)
             }
         }
-    }
-
-    private func clear() {
-        settings.clearToken()
-        token = ""
-        status = .idle
-        store.resetAndRefresh()
     }
 }
 
@@ -137,6 +150,9 @@ private struct RepositoriesSettingsTab: View {
     @State private var newRepo = ""
     @State private var selection: String?
     @State private var addError: String?
+    @State private var discoveryAccountId: String?
+    @State private var discoveredRepos: [GHRepository] = []
+    @State private var isDiscovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -146,28 +162,73 @@ private struct RepositoriesSettingsTab: View {
             detail
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .onAppear {
+            if discoveryAccountId == nil { discoveryAccountId = settings.accounts.first?.id }
+            discover()
+        }
+        .onChange(of: discoveryAccountId) { _ in discover() }
     }
 
     private var repoList: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Picker("", selection: $discoveryAccountId) {
+                    ForEach(settings.accounts) { account in
+                        Text(account.displayName).tag(Optional(account.id))
+                    }
+                }
+                .labelsHidden()
+                Button { discover() } label: {
+                    if isDiscovering {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(discoveryAccountId == nil || isDiscovering)
+                .help("Tải repository token có thể truy cập")
+            }
+
             List(selection: $selection) {
-                ForEach(settings.repos) { repo in
-                    HStack(spacing: 6) {
-                        Toggle("", isOn: enabledBinding(for: repo))
-                            .labelsHidden()
-                            .toggleStyle(.checkbox)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(repo.name).font(.system(size: 12, weight: .medium))
-                            Text(repo.owner).font(.system(size: 10)).foregroundStyle(.secondary)
+                Section("Đang theo dõi") {
+                    ForEach(settings.repos) { repo in
+                        HStack(spacing: 6) {
+                            Toggle("", isOn: enabledBinding(for: repo))
+                                .labelsHidden()
+                                .toggleStyle(.checkbox)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(repo.name).font(.system(size: 12, weight: .medium))
+                                Text(repo.owner).font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if !repo.watchedWorkflowIds.isEmpty {
+                                Text("\(repo.watchedWorkflowIds.count)")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        Spacer()
-                        if !repo.watchedWorkflowIds.isEmpty {
-                            Text("\(repo.watchedWorkflowIds.count)")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.secondary)
+                        .tag(repo.id)
+                    }
+                }
+
+                if !availableRepos.isEmpty {
+                    Section("Có thể thêm") {
+                        ForEach(availableRepos) { repo in
+                            Button { importRepo(repo) } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(repo.name).font(.system(size: 12, weight: .medium))
+                                        Text(repo.owner.login).font(.system(size: 10)).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "plus.circle")
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .tag(repo.id)
                 }
             }
             .listStyle(.bordered)
@@ -193,6 +254,12 @@ private struct RepositoriesSettingsTab: View {
                 }
                 .controlSize(.small)
             }
+        }
+    }
+
+    private var availableRepos: [GHRepository] {
+        discoveredRepos.filter { candidate in
+            !settings.repos.contains { $0.id.caseInsensitiveCompare(candidate.slug) == .orderedSame }
         }
     }
 
@@ -224,16 +291,42 @@ private struct RepositoriesSettingsTab: View {
     }
 
     private func add() {
-        guard let config = RepoConfig.parse(newRepo) else {
+        guard var config = RepoConfig.parse(newRepo) else {
             addError = "Định dạng phải là owner/repo hoặc URL GitHub."
             return
         }
+        config.accountId = settings.accounts.first?.id
         guard settings.addRepo(config) else {
             addError = "Repo này đã có trong danh sách."
             return
         }
         addError = nil
         newRepo = ""
+        selection = config.id
+    }
+
+    private func discover() {
+        guard let accountId = discoveryAccountId else {
+            discoveredRepos = []
+            return
+        }
+        isDiscovering = true
+        addError = nil
+        Task {
+            do {
+                discoveredRepos = try await store.discoverRepositories(accountId: accountId)
+            } catch {
+                addError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                discoveredRepos = []
+            }
+            isDiscovering = false
+        }
+    }
+
+    private func importRepo(_ repository: GHRepository) {
+        guard var config = RepoConfig.parse(repository.slug) else { return }
+        config.accountId = discoveryAccountId
+        guard settings.addRepo(config) else { return }
         selection = config.id
     }
 }
@@ -270,6 +363,15 @@ private struct RepoDetailView: View {
             }
 
             HStack(spacing: 6) {
+                Text("Account:").font(.system(size: 11))
+                Picker("", selection: accountBinding) {
+                    ForEach(settings.accounts) { account in
+                        Text(account.displayName).tag(Optional(account.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+
                 Text("Branch:").font(.system(size: 11))
                 TextField("để trống = tất cả", text: branchBinding)
                     .textFieldStyle(.roundedBorder)
@@ -340,6 +442,21 @@ private struct RepoDetailView: View {
         )
     }
 
+    private var accountBinding: Binding<String?> {
+        Binding(
+            get: { settings.resolvedAccountId(for: repo) },
+            set: { newValue in
+                var copy = repo
+                copy.accountId = newValue
+                settings.update(copy)
+                Task {
+                    store.clearWorkflowCatalog(for: repo.id)
+                    load(force: true)
+                }
+            }
+        )
+    }
+
     private func workflowBinding(_ workflow: GHWorkflow) -> Binding<Bool> {
         Binding(
             get: {
@@ -365,8 +482,8 @@ private struct RepoDetailView: View {
 
     private func load(force: Bool) {
         guard force || store.workflowCatalog[repo.id] == nil else { return }
-        guard settings.hasToken else {
-            loadError = "Cần cấu hình token ở tab GitHub trước."
+        guard settings.resolvedAccountId(for: repo) != nil else {
+            loadError = "Cần thêm account ở tab GitHub trước."
             return
         }
         isLoading = true
@@ -392,20 +509,22 @@ private struct GeneralSettingsTab: View {
         Form {
             Section {
                 Toggle("Khởi động cùng macOS", isOn: $settings.launchAtLogin)
+                Toggle("Thông báo khi có CI/CD mới", isOn: notificationBinding)
                 Toggle("Chỉ hiện run mới nhất của mỗi workflow", isOn: $settings.latestPerWorkflowOnly)
+                Toggle("Hiện các CI/CD gần đây", isOn: $settings.showRecentRuns)
             }
 
             Section("Tần suất cập nhật") {
                 LabeledContent("Khi có run đang chạy") {
                     HStack {
-                        Slider(value: $settings.activeInterval, in: 5...60, step: 5)
+                        Slider(value: $settings.activeInterval, in: 2...5, step: 1)
                             .frame(width: 220)
                         Text("\(Int(settings.activeInterval))s").monospacedDigit().frame(width: 36)
                     }
                 }
                 LabeledContent("Khi rảnh") {
                     HStack {
-                        Slider(value: $settings.idleInterval, in: 30...600, step: 30)
+                        Slider(value: $settings.idleInterval, in: 2...5, step: 1)
                             .frame(width: 220)
                         Text("\(Int(settings.idleInterval))s").monospacedDigit().frame(width: 36)
                     }
@@ -426,6 +545,11 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
+                Text(settings.showRecentRuns
+                     ? "Popover hiện cả các run thành công, bị huỷ và bỏ qua gần đây."
+                     : "Mặc định chỉ hiện CI/CD đang chạy, đang chờ hoặc bị lỗi.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
                 Text("Requests dùng ETag nên phần lớn lần poll trả về 304 và không bị tính vào rate limit "
                      + "(5.000 request/giờ cho token cá nhân). App tự tạm dừng khi máy sleep.")
                     .font(.system(size: 10))
@@ -434,5 +558,19 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var notificationBinding: Binding<Bool> {
+        Binding(
+            get: { settings.notificationsEnabled },
+            set: { enabled in
+                settings.notificationsEnabled = enabled
+                guard enabled else { return }
+                Task {
+                    let granted = await NotificationService.shared.requestAuthorization()
+                    if !granted { settings.notificationsEnabled = false }
+                }
+            }
+        )
     }
 }

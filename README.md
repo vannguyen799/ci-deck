@@ -24,7 +24,9 @@ Menu bar app cho macOS để theo dõi GitHub Actions. Click icon ở góc phả
 
 - **Menu bar extra** (`LSUIElement`, không chiếm Dock). Icon đổi theo trạng thái tổng: đang chạy / đỏ / xanh, kèm badge số lượng.
 - **Cấu hình repo**: thêm `owner/repo` (dán URL GitHub cũng được), bật/tắt từng repo, lọc theo branch.
+- **Nhiều GitHub account / organization**: lưu nhiều token tách biệt trong Keychain và chọn account có scope phù hợp cho từng repo.
 - **Chọn workflow**: tick từng workflow muốn theo dõi trong mỗi repo; không tick gì = theo dõi tất cả.
+- **Lọc run gần đây**: mặc định popover chỉ hiện run đang chạy/chờ hoặc bị lỗi; có toggle để hiện thêm lịch sử gần nhất.
 - **Tiến trình thật**: với run đang chạy, app gọi endpoint jobs để tính `x/y jobs`, step hiện tại, và ETA suy ra từ thời lượng các lần chạy thành công trước đó.
 - **Polling thích ứng**: 10s khi có run đang chạy, 60s khi rảnh (chỉnh được). Dùng ETag nên phần lớn request trả `304` và **không bị tính vào rate limit**. Tự dừng khi máy sleep, refresh ngay khi wake. Tự lùi về 120s khi rate limit còn dưới 100.
 - **Token trong Keychain**, không ghi ra file cấu hình.
@@ -56,10 +58,10 @@ App ký ad-hoc, nên lần đầu mở có thể phải vào **System Settings �
 ## Cấu hình
 
 1. Mở app → click icon trên menu bar → ⚙.
-2. Tab **GitHub**: dán Personal Access Token, bấm *Lưu & kiểm tra*.
+2. Tab **GitHub**: chỉ cần dán một hoặc nhiều Personal Access Token; app tự lấy username để đặt tên. Mỗi token có thể thuộc account hoặc organization scope khác nhau.
    - Fine-grained token: chọn repo cần theo dõi, quyền **Actions: Read-only** + **Metadata: Read-only**.
    - Classic token: scope `repo` (repo private) hoặc `public_repo` (repo public).
-3. Tab **Repositories**: gõ `owner/repo` → *Thêm*. Chọn repo trong danh sách để tick các workflow và đặt branch filter.
+3. Tab **Repositories**: chọn account để app tự liệt kê repo token truy cập được, bấm `+` để theo dõi; hoặc nhập thủ công `owner/repo`. Sau đó chọn workflow và branch filter.
 4. Tab **Chung**: tần suất poll, số run hiển thị, khởi động cùng macOS.
 
 ## Cấu trúc

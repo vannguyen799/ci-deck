@@ -3,11 +3,13 @@ import PackageDescription
 
 let package = Package(
     name: "CIDeck",
+    defaultLocalization: "vi",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
             name: "CIDeck",
-            path: "Sources/CIDeck"
+            path: "Sources/CIDeck",
+            resources: [.process("Resources")]
         )
     ]
 )

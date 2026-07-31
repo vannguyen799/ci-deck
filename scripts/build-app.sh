@@ -31,6 +31,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/CIDeck"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+for locale in en vi; do
+  mkdir -p "$APP/Contents/Resources/$locale.lproj"
+  cp "$ROOT/Sources/CIDeck/Resources/$locale.lproj/Localizable.strings" \
+     "$APP/Contents/Resources/$locale.lproj/Localizable.strings"
+done
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 echo "==> codesign (ad-hoc)"
