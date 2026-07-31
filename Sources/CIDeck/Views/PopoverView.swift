@@ -7,17 +7,30 @@ struct PopoverView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var store: RunsStore
     @Environment(\.openWindow) private var openWindow
+    @State private var collapsedRepoIds = Set<String>()
+
+    private var visibleRepoStates: [RepoRuns] {
+        store.repoStates.filter { !$0.runs.isEmpty || $0.error != nil }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             footer
         }
         .frame(width: 400)
-        .frame(maxHeight: 540)
+        .frame(height: popoverHeight)
+    }
+
+    /// 70% of the previously enlarged (2.5x) height, capped to the current screen.
+    private var popoverHeight: CGFloat {
+        let desired: CGFloat = 540 * 2.5 * 0.7
+        let available = (NSScreen.main?.visibleFrame.height ?? desired) - 24
+        return min(desired, max(540, available))
     }
 
     // MARK: Header
@@ -82,28 +95,34 @@ struct PopoverView: View {
                 actionTitle: "Thêm repo",
                 action: { openSettings() }
             )
-        } else if store.repoStates.isEmpty {
+        } else if store.repoStates.isEmpty && store.lastRefresh == nil {
             EmptyStateView(
                 systemImage: "clock.arrow.circlepath",
                 title: "Đang tải…",
                 message: "Đang lấy workflow runs từ GitHub."
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        } else if visibleRepoStates.isEmpty {
+            EmptyStateView(
+                systemImage: "checkmark.circle",
+                title: "Không có CI/CD cần chú ý",
+                message: settings.showRecentRuns
+                    ? "Không có run nào khớp cấu hình hiện tại."
+                    : "Các workflow gần nhất đều thành công."
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
-                    ForEach(store.repoStates) { state in
+                    ForEach(visibleRepoStates) { state in
                         Section {
-                            if let error = state.error {
-                                errorRow(error)
-                            } else if state.runs.isEmpty {
-                                Text("Không có run nào khớp bộ lọc.")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                            } else {
-                                ForEach(state.runs) { item in
-                                    LiveRunRowView(item: item)
+                            if !collapsedRepoIds.contains(state.id) {
+                                if let error = state.error {
+                                    errorRow(error)
+                                } else {
+                                    ForEach(state.runs) { item in
+                                        LiveRunRowView(item: item)
+                                    }
                                 }
                             }
                         } header: {
@@ -120,6 +139,10 @@ struct PopoverView: View {
 
     private func repoHeader(_ state: RepoRuns) -> some View {
         HStack(spacing: 5) {
+            Image(systemName: collapsedRepoIds.contains(state.id) ? "chevron.right" : "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 9)
             Image(systemName: "shippingbox")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
@@ -139,6 +162,17 @@ struct PopoverView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(.regularMaterial)
+        .contentShape(Rectangle())
+        .onTapGesture { toggleRepo(state.id) }
+        .help(collapsedRepoIds.contains(state.id) ? "Mở rộng repo" : "Thu gọn repo")
+    }
+
+    private func toggleRepo(_ id: String) {
+        if collapsedRepoIds.contains(id) {
+            collapsedRepoIds.remove(id)
+        } else {
+            collapsedRepoIds.insert(id)
+        }
     }
 
     private func errorRow(_ message: String) -> some View {

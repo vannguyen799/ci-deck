@@ -4,6 +4,11 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>vi</string>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>CIDeck</string>
 	<key>CFBundleIdentifier</key>
@@ -14,6 +19,8 @@
 	<string>CIDeck</string>
 	<key>CFBundleDisplayName</key>
 	<string>CIDeck</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

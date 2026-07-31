@@ -47,14 +47,14 @@ struct RateLimitInfo: Sendable, Equatable {
 actor GitHubClient {
     private let session: URLSession
     private let decoder: JSONDecoder
-    private let tokenProvider: @Sendable () -> String?
+    private let tokenProvider: @Sendable (String?) -> String?
 
     private var etags: [String: String] = [:]
     private var bodies: [String: Data] = [:]
 
     private(set) var rateLimit = RateLimitInfo()
 
-    init(tokenProvider: @escaping @Sendable () -> String? = { AppSettings.currentToken() }) {
+    init(tokenProvider: @escaping @Sendable (String?) -> String? = { AppSettings.token(for: $0) }) {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 20
         config.waitsForConnectivity = false
@@ -77,36 +77,45 @@ actor GitHubClient {
 
     // MARK: - Endpoints
 
-    func viewer() async throws -> GHUser {
-        try await fetch(GHUser.self, path: "/user")
+    func viewer(accountId: String) async throws -> GHUser {
+        try await fetch(GHUser.self, path: "/user", accountId: accountId)
     }
 
-    func workflows(owner: String, repo: String) async throws -> [GHWorkflow] {
+    func repositories(accountId: String) async throws -> [GHRepository] {
+        try await fetch([GHRepository].self,
+                        path: "/user/repos?per_page=100&sort=full_name&direction=asc",
+                        accountId: accountId)
+    }
+
+    func workflows(owner: String, repo: String, accountId: String?) async throws -> [GHWorkflow] {
         let list = try await fetch(GHWorkflowList.self,
-                                   path: "/repos/\(owner)/\(repo)/actions/workflows?per_page=100")
+                                   path: "/repos/\(owner)/\(repo)/actions/workflows?per_page=100",
+                                   accountId: accountId)
         return list.workflows
     }
 
-    func runs(owner: String, repo: String, perPage: Int, branch: String) async throws -> [GHRun] {
+    func runs(owner: String, repo: String, perPage: Int, branch: String, accountId: String?) async throws -> [GHRun] {
         var path = "/repos/\(owner)/\(repo)/actions/runs?per_page=\(perPage)&exclude_pull_requests=true"
         if !branch.isEmpty {
             path += "&branch=\(Fmt.query(branch))"
         }
-        let list = try await fetch(GHRunList.self, path: path)
+        let list = try await fetch(GHRunList.self, path: path, accountId: accountId)
         return list.workflowRuns
     }
 
-    func jobs(owner: String, repo: String, runId: Int) async throws -> [GHJob] {
+    func jobs(owner: String, repo: String, runId: Int, accountId: String?) async throws -> [GHJob] {
         let list = try await fetch(GHJobList.self,
-                                   path: "/repos/\(owner)/\(repo)/actions/runs/\(runId)/jobs?per_page=100")
+                                   path: "/repos/\(owner)/\(repo)/actions/runs/\(runId)/jobs?per_page=100",
+                                   accountId: accountId)
         return list.jobs
     }
 
     // MARK: - Transport
 
-    private func fetch<T: Decodable>(_ type: T.Type, path: String, allowRetry: Bool = true) async throws -> T {
-        guard let token = tokenProvider(), !token.isEmpty else { throw GitHubError.noToken }
+    private func fetch<T: Decodable>(_ type: T.Type, path: String, accountId: String?, allowRetry: Bool = true) async throws -> T {
+        guard let token = tokenProvider(accountId), !token.isEmpty else { throw GitHubError.noToken }
         guard let url = URL(string: "https://api.github.com" + path) else { throw GitHubError.badURL(path) }
+        let cacheKey = "\(accountId ?? "none"):\(path)"
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -115,7 +124,7 @@ actor GitHubClient {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue("CIDeck/1.0", forHTTPHeaderField: "User-Agent")
-        if let etag = etags[path] {
+        if let etag = etags[cacheKey] {
             request.setValue(etag, forHTTPHeaderField: "If-None-Match")
         }
 
@@ -128,17 +137,17 @@ actor GitHubClient {
         switch http.statusCode {
         case 200:
             if let etag = http.value(forHTTPHeaderField: "ETag") {
-                etags[path] = etag
-                bodies[path] = data
+                etags[cacheKey] = etag
+                bodies[cacheKey] = data
             }
             return try decode(type, from: data)
 
         case 304:
-            guard let cached = bodies[path] else {
+            guard let cached = bodies[cacheKey] else {
                 // ETag without a cached body (e.g. after a decode failure). Retry unconditionally.
-                etags.removeValue(forKey: path)
+                etags.removeValue(forKey: cacheKey)
                 guard allowRetry else { throw GitHubError.http(304, "Không có bản cache") }
-                return try await fetch(type, path: path, allowRetry: false)
+                return try await fetch(type, path: path, accountId: accountId, allowRetry: false)
             }
             return try decode(type, from: cached)
 

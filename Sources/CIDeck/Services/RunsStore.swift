@@ -24,6 +24,8 @@ final class RunsStore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     /// workflowId -> typical successful duration, used for the ETA hint.
     private var baselines: [Int: TimeInterval] = [:]
+    private var knownRunIds = Set<Int>()
+    private var hasSeededRunIds = false
 
     init(settings: AppSettings, client: GitHubClient = GitHubClient()) {
         self.settings = settings
@@ -36,11 +38,17 @@ final class RunsStore: ObservableObject {
 
     func start() {
         guard loop == nil else { return }
+        if settings.notificationsEnabled {
+            Task {
+                let granted = await NotificationService.shared.requestAuthorization()
+                if !granted { settings.notificationsEnabled = false }
+            }
+        }
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
-                let seconds = await self.nextInterval()
+                let seconds = self.nextInterval()
                 try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             }
         }
@@ -75,7 +83,7 @@ final class RunsStore: ObservableObject {
         if let remaining = rateLimit.remaining, remaining < 100 {
             return max(base, 120)
         }
-        return max(5, base)
+        return min(5, max(2, base))
     }
 
     private func observeSystemSleep() {
@@ -132,11 +140,13 @@ final class RunsStore: ObservableObject {
         let options = LoadOptions(
             runsPerRepo: settings.runsPerRepo,
             visibleRunsPerRepo: settings.visibleRunsPerRepo,
-            latestPerWorkflowOnly: settings.latestPerWorkflowOnly
+            latestPerWorkflowOnly: settings.latestPerWorkflowOnly,
+            showRecentRuns: settings.showRecentRuns
         )
         let names = workflowNameMap()
         let currentBaselines = baselines
         let client = self.client
+        let accountIds = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, settings.resolvedAccountId(for: $0)) })
 
         var results: [String: RepoRuns] = [:]
         await withTaskGroup(of: RepoRuns.self) { group in
@@ -146,7 +156,8 @@ final class RunsStore: ObservableObject {
                                     client: client,
                                     options: options,
                                     workflowNames: names,
-                                    baselines: currentBaselines)
+                                    baselines: currentBaselines,
+                                    accountId: accountIds[repo.id] ?? nil)
                 }
             }
             for await state in group {
@@ -155,18 +166,49 @@ final class RunsStore: ObservableObject {
         }
 
         // Preserve the order the user configured rather than completion order.
-        repoStates = repos.compactMap { results[$0.id] }
+        let refreshedStates = repos.compactMap { results[$0.id] }
+        notifyAboutNewRuns(in: refreshedStates)
+        repoStates = refreshedStates
         updateBaselines(from: repoStates)
         rateLimit = await client.currentRateLimit()
         lastRefresh = Date()
         globalError = repoStates.allSatisfy { $0.error != nil } ? repoStates.first?.error : nil
     }
 
+    private func notifyAboutNewRuns(in states: [RepoRuns]) {
+        let previousRefresh = lastRefresh
+        let current = states.flatMap { state in
+            state.detectedRuns.map { (repository: state.repo.slug, item: $0) }
+        }
+        let currentIds = Set(current.map { $0.item.run.id })
+
+        // The first successful refresh establishes a baseline. Existing history
+        // is not "new" merely because the app has just launched.
+        guard hasSeededRunIds else {
+            knownRunIds.formUnion(currentIds)
+            hasSeededRunIds = true
+            return
+        }
+
+        if settings.notificationsEnabled {
+            let newRuns = current.filter { entry in
+                guard !knownRunIds.contains(entry.item.run.id) else { return false }
+                guard let previousRefresh else { return true }
+                return entry.item.run.createdAt > previousRefresh
+            }.sorted { $0.item.run.createdAt < $1.item.run.createdAt }
+            for entry in newRuns {
+                NotificationService.shared.notifyNewRun(entry.item, repository: entry.repository)
+            }
+        }
+        knownRunIds.formUnion(currentIds)
+    }
+
     private func loadMissingCatalogs(for repos: [RepoConfig]) async {
         let missing = repos.filter { workflowCatalog[$0.id] == nil }
         guard !missing.isEmpty else { return }
         for repo in missing {
-            if let list = try? await client.workflows(owner: repo.owner, repo: repo.name) {
+            let accountId = settings.resolvedAccountId(for: repo)
+            if let list = try? await client.workflows(owner: repo.owner, repo: repo.name, accountId: accountId) {
                 workflowCatalog[repo.id] = list.sorted { $0.name < $1.name }
             }
         }
@@ -174,13 +216,24 @@ final class RunsStore: ObservableObject {
 
     /// Forces a catalog reload — used by the settings screen's refresh button.
     func reloadWorkflows(for repo: RepoConfig) async throws {
-        let list = try await client.workflows(owner: repo.owner, repo: repo.name)
+        let list = try await client.workflows(owner: repo.owner, repo: repo.name,
+                                              accountId: settings.resolvedAccountId(for: repo))
         workflowCatalog[repo.id] = list.sorted { $0.name < $1.name }
     }
 
-    func validateToken() async throws -> GHUser {
+    func clearWorkflowCatalog(for repoId: String) {
+        workflowCatalog.removeValue(forKey: repoId)
+    }
+
+    func validateToken(accountId: String) async throws -> GHUser {
         await client.resetCache()
-        return try await client.viewer()
+        return try await client.viewer(accountId: accountId)
+    }
+
+    func discoverRepositories(accountId: String) async throws -> [GHRepository] {
+        try await client.repositories(accountId: accountId)
+            .filter { !$0.archived }
+            .sorted { $0.slug.localizedCaseInsensitiveCompare($1.slug) == .orderedAscending }
     }
 
     private func workflowNameMap() -> [Int: String] {
@@ -241,24 +294,48 @@ final class RunsStore: ObservableObject {
         let runsPerRepo: Int
         let visibleRunsPerRepo: Int
         let latestPerWorkflowOnly: Bool
+        let showRecentRuns: Bool
     }
 
     nonisolated private static func load(repo: RepoConfig,
                                          client: GitHubClient,
                                          options: LoadOptions,
                                          workflowNames: [Int: String],
-                                         baselines: [Int: TimeInterval]) async -> RepoRuns {
+                                         baselines: [Int: TimeInterval],
+                                         accountId: String?) async -> RepoRuns {
         do {
             let runs = try await client.runs(owner: repo.owner,
                                              repo: repo.name,
                                              perPage: options.runsPerRepo,
-                                             branch: repo.branchFilter)
+                                             branch: repo.branchFilter,
+                                             accountId: accountId)
 
-            var filtered = runs
+            // Do not rely on the server's incidental ordering: all filtering and
+            // rendering below starts with the newest run.
+            var filtered = runs.sorted { lhs, rhs in
+                if lhs.createdAt == rhs.createdAt { return lhs.id > rhs.id }
+                return lhs.createdAt > rhs.createdAt
+            }
             if !repo.watchedWorkflowIds.isEmpty {
                 filtered = filtered.filter { repo.watchedWorkflowIds.contains($0.workflowId) }
             }
-            if options.latestPerWorkflowOnly {
+            let detectedItems = filtered.map { run in
+                RunItem(run: run,
+                        workflowName: workflowNames[run.workflowId] ?? run.name ?? "Workflow",
+                        progress: nil,
+                        jobsDone: nil,
+                        jobsTotal: nil,
+                        currentStep: nil,
+                        etaSeconds: nil,
+                        jobs: nil)
+            }
+            if !options.showRecentRuns {
+                // Only the actual latest run matters. Do this before filtering by state so
+                // an old failure is hidden once a newer run succeeds.
+                var seen = Set<Int>()
+                filtered = filtered.filter { seen.insert($0.workflowId).inserted }
+                filtered = filtered.filter { $0.state.isActive || $0.state == .failure }
+            } else if options.latestPerWorkflowOnly {
                 var seen = Set<Int>()
                 filtered = filtered.filter { seen.insert($0.workflowId).inserted }
             }
@@ -271,7 +348,8 @@ final class RunsStore: ObservableObject {
                         jobsDone: nil,
                         jobsTotal: nil,
                         currentStep: nil,
-                        etaSeconds: nil)
+                        etaSeconds: nil,
+                        jobs: nil)
             }
 
             // Jobs are only fetched for runs that are actually moving.
@@ -281,7 +359,8 @@ final class RunsStore: ObservableObject {
                 await withTaskGroup(of: (Int, [GHJob]?).self) { group in
                     for runId in activeIds {
                         group.addTask {
-                            let jobs = try? await client.jobs(owner: repo.owner, repo: repo.name, runId: runId)
+                            let jobs = try? await client.jobs(owner: repo.owner, repo: repo.name,
+                                                             runId: runId, accountId: accountId)
                             return (runId, jobs)
                         }
                     }
@@ -297,16 +376,18 @@ final class RunsStore: ObservableObject {
                     items[index].jobsDone = summary.done
                     items[index].jobsTotal = summary.total
                     items[index].currentStep = summary.currentStep
+                    items[index].jobs = jobs
                     items[index].etaSeconds = eta(elapsed: Date().timeIntervalSince(items[index].run.startedAt),
                                                   progress: summary.fraction,
                                                   baseline: baselines[items[index].run.workflowId])
                 }
             }
 
-            return RepoRuns(id: repo.id, repo: repo, runs: items, error: nil)
+            return RepoRuns(id: repo.id, repo: repo, runs: items,
+                            detectedRuns: detectedItems, error: nil)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            return RepoRuns(id: repo.id, repo: repo, runs: [], error: message)
+            return RepoRuns(id: repo.id, repo: repo, runs: [], detectedRuns: [], error: message)
         }
     }
 

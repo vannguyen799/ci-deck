@@ -10,6 +10,8 @@ struct RepoConfig: Codable, Hashable, Identifiable, Sendable {
     var watchedWorkflowIds: Set<Int> = []
     /// Empty means "any branch".
     var branchFilter: String = ""
+    /// Account used to access this repo. Nil falls back to the first account.
+    var accountId: String?
 
     var id: String { "\(owner)/\(name)" }
     var slug: String { "\(owner)/\(name)" }
@@ -34,6 +36,14 @@ struct RepoConfig: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+struct AccountConfig: Codable, Hashable, Identifiable, Sendable {
+    var id: String
+    var login: String
+    var label: String
+
+    var displayName: String { label.isEmpty ? "@\(login)" : label }
+}
+
 /// User preferences, persisted to `UserDefaults`. The GitHub token lives in the
 /// Keychain instead and is only surfaced here as `hasToken`.
 @MainActor
@@ -41,45 +51,73 @@ final class AppSettings: ObservableObject {
     private static let storageKey = "cideck.settings.v1"
 
     @Published var repos: [RepoConfig] = []                { didSet { save() } }
+    @Published var accounts: [AccountConfig] = []          { didSet { save() } }
     /// Poll interval while at least one run is queued or in progress.
-    @Published var activeInterval: Double = 10             { didSet { save() } }
+    @Published var activeInterval: Double = 2              { didSet { save() } }
     /// Poll interval when everything is idle.
-    @Published var idleInterval: Double = 60               { didSet { save() } }
+    @Published var idleInterval: Double = 5                { didSet { save() } }
+    /// Show a macOS notification when a previously unseen workflow run appears.
+    @Published var notificationsEnabled: Bool = true       { didSet { save() } }
     /// How many runs to request per repository.
     @Published var runsPerRepo: Int = 30                   { didSet { save() } }
     /// How many runs to actually render per repository.
     @Published var visibleRunsPerRepo: Int = 6             { didSet { save() } }
     /// Collapse to only the newest run of each workflow.
     @Published var latestPerWorkflowOnly: Bool = true      { didSet { save() } }
+    /// Include successful/cancelled recent runs; off keeps only active and failed runs.
+    @Published var showRecentRuns: Bool = false            { didSet { save() } }
     @Published var launchAtLogin: Bool = false             { didSet { save(); syncLoginItem() } }
 
-    @Published private(set) var hasToken: Bool = false
+    var hasToken: Bool { !accounts.isEmpty }
 
     private var isLoading = false
 
     init() {
         load()
-        hasToken = Keychain.read()?.isEmpty == false
+        migrateLegacyTokenIfNeeded()
     }
 
     // MARK: Token
 
-    func saveToken(_ token: String) throws {
+    @discardableResult
+    func addAccount(token: String, login: String = "GitHub", label: String = "") throws -> AccountConfig {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SettingsError.emptyToken }
-        try Keychain.save(trimmed)
-        hasToken = true
+        let account = AccountConfig(id: UUID().uuidString, login: login, label: label)
+        try Keychain.save(trimmed, account: account.id)
+        accounts.append(account)
+        return account
     }
 
-    func clearToken() {
-        Keychain.delete()
-        hasToken = false
+    func updateAccount(_ account: AccountConfig, token: String? = nil) throws {
+        if let token {
+            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw SettingsError.emptyToken }
+            try Keychain.save(trimmed, account: account.id)
+        }
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        accounts[index] = account
     }
 
-    /// Read by `GitHubClient` from a background context, so it must not touch actor state.
-    nonisolated static func currentToken() -> String? {
-        guard let token = Keychain.read(), !token.isEmpty else { return nil }
+    func removeAccount(id: String) {
+        Keychain.delete(account: id)
+        accounts.removeAll { $0.id == id }
+        let fallback = accounts.first?.id
+        repos = repos.map { repo in
+            var copy = repo
+            if copy.accountId == id { copy.accountId = fallback }
+            return copy
+        }
+    }
+
+    nonisolated static func token(for accountId: String?) -> String? {
+        guard let accountId, let token = Keychain.read(account: accountId), !token.isEmpty else { return nil }
         return token
+    }
+
+    func resolvedAccountId(for repo: RepoConfig) -> String? {
+        if let id = repo.accountId, accounts.contains(where: { $0.id == id }) { return id }
+        return accounts.first?.id
     }
 
     // MARK: Repo helpers
@@ -121,11 +159,14 @@ final class AppSettings: ObservableObject {
 
     private struct Payload: Codable {
         var repos: [RepoConfig]
+        var accounts: [AccountConfig]?
         var activeInterval: Double
         var idleInterval: Double
         var runsPerRepo: Int
         var visibleRunsPerRepo: Int
         var latestPerWorkflowOnly: Bool
+        var showRecentRuns: Bool?
+        var notificationsEnabled: Bool?
         var launchAtLogin: Bool
     }
 
@@ -136,11 +177,16 @@ final class AppSettings: ObservableObject {
 
         isLoading = true
         repos = payload.repos
-        activeInterval = payload.activeInterval
-        idleInterval = payload.idleInterval
+        accounts = payload.accounts ?? []
+        // Older versions allowed much slower values. Keep persisted settings in
+        // the new fast-polling range so a newly started run is found promptly.
+        activeInterval = min(5, max(2, payload.activeInterval))
+        idleInterval = min(5, max(2, payload.idleInterval))
         runsPerRepo = payload.runsPerRepo
         visibleRunsPerRepo = payload.visibleRunsPerRepo
         latestPerWorkflowOnly = payload.latestPerWorkflowOnly
+        showRecentRuns = payload.showRecentRuns ?? false
+        notificationsEnabled = payload.notificationsEnabled ?? true
         launchAtLogin = payload.launchAtLogin
         isLoading = false
     }
@@ -149,15 +195,28 @@ final class AppSettings: ObservableObject {
         guard !isLoading else { return }
         let payload = Payload(
             repos: repos,
+            accounts: accounts,
             activeInterval: activeInterval,
             idleInterval: idleInterval,
             runsPerRepo: runsPerRepo,
             visibleRunsPerRepo: visibleRunsPerRepo,
             latestPerWorkflowOnly: latestPerWorkflowOnly,
+            showRecentRuns: showRecentRuns,
+            notificationsEnabled: notificationsEnabled,
             launchAtLogin: launchAtLogin
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         UserDefaults.standard.set(data, forKey: Self.storageKey)
+    }
+
+
+    private func migrateLegacyTokenIfNeeded() {
+        guard accounts.isEmpty,
+              let token = Keychain.read(account: Keychain.legacyAccount), !token.isEmpty else { return }
+        let account = AccountConfig(id: UUID().uuidString, login: "GitHub", label: "Mặc định")
+        guard (try? Keychain.save(token, account: account.id)) != nil else { return }
+        accounts = [account]
+        Keychain.delete(account: Keychain.legacyAccount)
     }
 
     private func syncLoginItem() {

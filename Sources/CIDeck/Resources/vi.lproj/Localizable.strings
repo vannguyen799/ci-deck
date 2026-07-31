@@ -1,0 +1,2 @@
+/* Vietnamese is the source language; explicit entry keeps the localization visible to macOS. */
+"Chung" = "Chung";

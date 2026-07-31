@@ -57,6 +57,12 @@ struct RunRowView: View {
                 }
                 .padding(.leading, 22)
                 .padding(.top, 1)
+
+                if let jobs = item.jobs, !jobs.isEmpty {
+                    JobPipelineView(jobs: jobs)
+                        .padding(.leading, 22)
+                        .padding(.top, 3)
+                }
             }
         }
         .padding(.vertical, 7)
@@ -116,6 +122,58 @@ struct RunRowView: View {
     private func open() {
         guard let url = URL(string: run.htmlUrl) else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// Compact job → step hierarchy for an active workflow run.
+private struct JobPipelineView: View {
+    let jobs: [GHJob]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(jobs) { job in
+                let state = RunState.from(status: job.status, conclusion: job.conclusion)
+                HStack(spacing: 6) {
+                    pipelineIcon(state: state)
+                    Text(job.name)
+                        .font(.system(size: 10, weight: state == .running ? .semibold : .regular))
+                        .foregroundStyle(state == .running ? .primary : .secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(state.label)
+                        .font(.system(size: 9))
+                        .foregroundStyle(state.tint)
+                }
+
+                if state == .running, let steps = job.steps {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(steps, id: \.number) { step in
+                            let stepState = RunState.from(status: step.status, conclusion: step.conclusion)
+                            HStack(spacing: 5) {
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.25))
+                                    .frame(width: 1, height: 12)
+                                pipelineIcon(state: stepState, size: 8)
+                                Text(step.name)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(stepState == .running ? .primary : .tertiary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .padding(.leading, 7)
+                }
+            }
+        }
+        .padding(7)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func pipelineIcon(state: RunState, size: CGFloat = 9) -> some View {
+        Image(systemName: state.symbol)
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(state.tint)
+            .frame(width: 11)
     }
 }
 
