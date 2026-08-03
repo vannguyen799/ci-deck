@@ -196,6 +196,28 @@ extension GHRun {
 
 // MARK: - View models
 
+/// One cell of a segmented progress bar: a step inside a job, or a job inside a run.
+struct ProgressSegment: Identifiable, Hashable, Sendable {
+    /// Step number within its job, or the job id at run level.
+    let id: Int
+    let state: RunState
+}
+
+/// One in-flight job of a run. Parallel jobs each get their own labelled bar,
+/// so a matrix or a fan-out shows as many progress bars as it has live nodes.
+struct RunTrack: Identifiable, Hashable, Sendable {
+    /// GitHub job id.
+    let id: Int
+    /// Name of what is running right now — the step, prefixed by the job when
+    /// several jobs are in flight at once.
+    let caption: String
+    /// 0...1, or `nil` when the job reports no steps yet (indeterminate bar).
+    let progress: Double?
+    let state: RunState
+    /// One cell per step of the job; empty when GitHub has not published steps yet.
+    let segments: [ProgressSegment]
+}
+
 /// One run as shown in the popover, enriched with job-level progress.
 struct RunItem: Identifiable, Hashable, Sendable {
     let run: GHRun
@@ -208,8 +230,11 @@ struct RunItem: Identifiable, Hashable, Sendable {
     var currentStep: String?
     /// Rough remaining seconds, derived from previous successful runs of the same workflow.
     var etaSeconds: TimeInterval?
-    /// Raw job/step tree for active runs, rendered as a compact GitHub-like pipeline.
-    var jobs: [GHJob]?
+    /// One entry per job still in flight, rendered as its own progress bar.
+    var tracks: [RunTrack] = []
+    /// One cell per job of the run, used by the single bar shown before any
+    /// per-job track exists.
+    var segments: [ProgressSegment] = []
     /// When this snapshot was taken, so the ETA can keep counting down between polls.
     var fetchedAt: Date = Date()
 
@@ -247,6 +272,15 @@ enum AggregateStatus: Equatable, Sendable {
         case .failure:     return "xmark.octagon.fill"
         case .success:     return "checkmark.circle"
         case .idle:        return "circle.dashed"
+        }
+    }
+
+    /// Small glyph shown next to the CI mark. `.running` is left out because the
+    /// mark's arc already spins, and `.idle` because a quiet bar is the point.
+    var accessorySymbol: String? {
+        switch self {
+        case .running, .idle: return nil
+        default:              return symbol
         }
     }
 

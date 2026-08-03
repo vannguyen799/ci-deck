@@ -67,6 +67,10 @@ actor GitHubClient {
         self.decoder = decoder
     }
 
+    private static let repositoryPageSize = 100
+    /// Caps discovery at 1000 repositories so a huge account cannot burn the rate limit.
+    private static let maxRepositoryPages = 10
+
     func currentRateLimit() -> RateLimitInfo { rateLimit }
 
     /// Drops all cached ETags — used after the token changes so nothing leaks across accounts.
@@ -81,10 +85,25 @@ actor GitHubClient {
         try await fetch(GHUser.self, path: "/user", accountId: accountId)
     }
 
+    /// Every repository the token can reach, organization repos included.
+    ///
+    /// `/user/repos` returns at most 100 per page sorted by full name, so a single
+    /// request silently drops everything past the first alphabetical page — which is
+    /// exactly where org repos tend to sit for accounts with many personal repos.
     func repositories(accountId: String) async throws -> [GHRepository] {
-        try await fetch([GHRepository].self,
-                        path: "/user/repos?per_page=100&sort=full_name&direction=asc",
-                        accountId: accountId)
+        var all: [GHRepository] = []
+        var seen = Set<Int>()
+        for page in 1...Self.maxRepositoryPages {
+            let path = "/user/repos?per_page=\(Self.repositoryPageSize)&page=\(page)"
+                + "&sort=full_name&direction=asc"
+                + "&affiliation=owner,collaborator,organization_member"
+            let batch = try await fetch([GHRepository].self, path: path, accountId: accountId)
+            for repo in batch where seen.insert(repo.id).inserted {
+                all.append(repo)
+            }
+            if batch.count < Self.repositoryPageSize { break }
+        }
+        return all
     }
 
     func workflows(owner: String, repo: String, accountId: String?) async throws -> [GHWorkflow] {

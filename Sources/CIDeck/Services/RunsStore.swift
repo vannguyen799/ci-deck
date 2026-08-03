@@ -20,12 +20,21 @@ final class RunsStore: ObservableObject {
     private let settings: AppSettings
     private let client: GitHubClient
     private var loop: Task<Void, Never>?
+    /// The pending inter-poll sleep, kept separate from `loop` so it can be cut
+    /// short without touching a poll that is already in flight.
+    private var sleeper: Task<Void, Never>?
+    /// Set by `refreshNow()`; consumed by the next `refresh()`.
+    private var wantsImmediateRefresh = false
     private var isAsleep = false
     private var cancellables = Set<AnyCancellable>()
     /// workflowId -> typical successful duration, used for the ETA hint.
     private var baselines: [Int: TimeInterval] = [:]
     private var knownRunIds = Set<Int>()
     private var hasSeededRunIds = false
+    /// runId -> the moment a succeeded run was first on screen. A success the user
+    /// has never seen keeps its place indefinitely; this stamp starts its countdown.
+    private var firstViewedAt: [Int: Date] = [:]
+    private var isPopoverOpen = false
 
     init(settings: AppSettings, client: GitHubClient = GitHubClient()) {
         self.settings = settings
@@ -48,21 +57,80 @@ final class RunsStore: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
-                let seconds = self.nextInterval()
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                await self.waitForNextTick()
             }
         }
     }
 
     func stop() {
+        sleeper?.cancel()
+        sleeper = nil
         loop?.cancel()
         loop = nil
     }
 
-    /// Cancels the pending sleep and polls right away.
+    /// Waits out the poll interval in a task of its own, so cancelling the wait is
+    /// not the same thing as cancelling the poll.
+    private func waitForNextTick() async {
+        // A refresh requested while the previous poll was still running has no sleep
+        // left to interrupt, so it is honoured here instead.
+        guard !wantsImmediateRefresh else { return }
+        let seconds = nextInterval()
+        let sleeper = Task {
+            // Cancellation is the normal way out of this wait, not an error.
+            do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) } catch {}
+        }
+        self.sleeper = sleeper
+        await withTaskCancellationHandler {
+            await sleeper.value
+        } onCancel: {
+            sleeper.cancel()
+        }
+        self.sleeper = nil
+    }
+
+    // MARK: - Viewed tracking
+
+    /// The popover became visible: everything green on screen right now starts its
+    /// `recentSuccessWindow` countdown.
+    func popoverDidAppear() {
+        isPopoverOpen = true
+        stampVisibleSuccessesAsViewed()
+    }
+
+    func popoverDidDisappear() {
+        isPopoverOpen = false
+    }
+
+    private func stampVisibleSuccessesAsViewed() {
+        let now = Date()
+        for state in repoStates {
+            for item in state.runs where item.state == .success {
+                if firstViewedAt[item.run.id] == nil { firstViewedAt[item.run.id] = now }
+            }
+        }
+    }
+
+    /// A stamp is only useful while GitHub still lists the run; dropping it any
+    /// earlier would make an expired success look unseen and pop back into the list.
+    private func pruneViewedStamps(against states: [RepoRuns]) {
+        guard states.allSatisfy({ $0.error == nil }) else { return }
+        let live = Set(states.flatMap { $0.detectedRuns.map(\.run.id) })
+        firstViewedAt = firstViewedAt.filter { live.contains($0.key) }
+    }
+
+    /// Cuts the pending sleep short so the next poll starts immediately.
+    ///
+    /// Deliberately does *not* tear the loop down: cancelling it would abort the
+    /// HTTP requests of a poll already in flight, and every repo would come back
+    /// with a "cancelled" transport error — a full screen of bogus error rows.
     func refreshNow() {
-        stop()
-        start()
+        guard loop != nil else {
+            start()
+            return
+        }
+        wantsImmediateRefresh = true
+        sleeper?.cancel()
     }
 
     /// Called after the token changes so cached ETags from the old identity are dropped.
@@ -119,6 +187,7 @@ final class RunsStore: ObservableObject {
     // MARK: - Refresh
 
     func refresh() async {
+        wantsImmediateRefresh = false
         guard settings.hasToken else {
             repoStates = []
             globalError = nil
@@ -141,7 +210,8 @@ final class RunsStore: ObservableObject {
             runsPerRepo: settings.runsPerRepo,
             visibleRunsPerRepo: settings.visibleRunsPerRepo,
             latestPerWorkflowOnly: settings.latestPerWorkflowOnly,
-            showRecentRuns: settings.showRecentRuns
+            showRecentRuns: settings.showRecentRuns,
+            viewedAt: firstViewedAt
         )
         let names = workflowNameMap()
         let currentBaselines = baselines
@@ -149,7 +219,8 @@ final class RunsStore: ObservableObject {
         let accountIds = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, settings.resolvedAccountId(for: $0)) })
 
         var results: [String: RepoRuns] = [:]
-        await withTaskGroup(of: RepoRuns.self) { group in
+        var wasAborted = false
+        await withTaskGroup(of: RepoRuns?.self) { group in
             for repo in repos {
                 group.addTask {
                     await Self.load(repo: repo,
@@ -161,14 +232,22 @@ final class RunsStore: ObservableObject {
                 }
             }
             for await state in group {
-                results[state.id] = state
+                if let state { results[state.id] = state } else { wasAborted = true }
             }
         }
+
+        // An aborted poll knows nothing; keep the previous snapshot on screen
+        // instead of replacing it with empty or error rows.
+        guard !wasAborted, !Task.isCancelled else { return }
 
         // Preserve the order the user configured rather than completion order.
         let refreshedStates = repos.compactMap { results[$0.id] }
         notifyAboutNewRuns(in: refreshedStates)
         repoStates = refreshedStates
+        pruneViewedStamps(against: refreshedStates)
+        // A run that goes green while the popover is already open counts as seen
+        // from the refresh that put it there.
+        if isPopoverOpen { stampVisibleSuccessesAsViewed() }
         updateBaselines(from: repoStates)
         rateLimit = await client.currentRateLimit()
         lastRefresh = Date()
@@ -290,19 +369,27 @@ final class RunsStore: ObservableObject {
 
     // MARK: - Per-repo loading (off the main actor)
 
+    /// How long a succeeded run keeps its place in the default (active + failed)
+    /// list once the user has actually seen it.
+    nonisolated static let recentSuccessWindow: TimeInterval = 5 * 60
+
     private struct LoadOptions: Sendable {
         let runsPerRepo: Int
         let visibleRunsPerRepo: Int
         let latestPerWorkflowOnly: Bool
         let showRecentRuns: Bool
+        /// runId -> first time the run was on screen; absent means never seen.
+        let viewedAt: [Int: Date]
     }
 
+    /// Returns `nil` when the poll was aborted rather than answered, so the caller
+    /// can tell "no verdict" apart from "the repo really is in this state".
     nonisolated private static func load(repo: RepoConfig,
                                          client: GitHubClient,
                                          options: LoadOptions,
                                          workflowNames: [Int: String],
                                          baselines: [Int: TimeInterval],
-                                         accountId: String?) async -> RepoRuns {
+                                         accountId: String?) async -> RepoRuns? {
         do {
             let runs = try await client.runs(owner: repo.owner,
                                              repo: repo.name,
@@ -319,6 +406,10 @@ final class RunsStore: ObservableObject {
             if !repo.watchedWorkflowIds.isEmpty {
                 filtered = filtered.filter { repo.watchedWorkflowIds.contains($0.workflowId) }
             }
+            // Cancelled runs say nothing about a workflow's health — they are usually
+            // a push superseding an earlier one. Drop them before the latest-per-workflow
+            // pass so a cancellation cannot mask the last result that did mean something.
+            filtered = filtered.filter { $0.state != .cancelled }
             let detectedItems = filtered.map { run in
                 RunItem(run: run,
                         workflowName: workflowNames[run.workflowId] ?? run.name ?? "Workflow",
@@ -326,15 +417,23 @@ final class RunsStore: ObservableObject {
                         jobsDone: nil,
                         jobsTotal: nil,
                         currentStep: nil,
-                        etaSeconds: nil,
-                        jobs: nil)
+                        etaSeconds: nil)
             }
             if !options.showRecentRuns {
                 // Only the actual latest run matters. Do this before filtering by state so
                 // an old failure is hidden once a newer run succeeds.
                 var seen = Set<Int>()
                 filtered = filtered.filter { seen.insert($0.workflowId).inserted }
-                filtered = filtered.filter { $0.state.isActive || $0.state == .failure }
+                let now = Date()
+                filtered = filtered.filter { run in
+                    if run.state.isActive || run.state == .failure { return true }
+                    guard run.state == .success else { return false }
+                    // A success the user has never had on screen waits for them however
+                    // long that takes; only once seen does it linger for the window and
+                    // then drop off, so a quick green is never missed entirely.
+                    guard let seenAt = options.viewedAt[run.id] else { return true }
+                    return now.timeIntervalSince(seenAt) < Self.recentSuccessWindow
+                }
             } else if options.latestPerWorkflowOnly {
                 var seen = Set<Int>()
                 filtered = filtered.filter { seen.insert($0.workflowId).inserted }
@@ -348,8 +447,7 @@ final class RunsStore: ObservableObject {
                         jobsDone: nil,
                         jobsTotal: nil,
                         currentStep: nil,
-                        etaSeconds: nil,
-                        jobs: nil)
+                        etaSeconds: nil)
             }
 
             // Jobs are only fetched for runs that are actually moving.
@@ -376,7 +474,8 @@ final class RunsStore: ObservableObject {
                     items[index].jobsDone = summary.done
                     items[index].jobsTotal = summary.total
                     items[index].currentStep = summary.currentStep
-                    items[index].jobs = jobs
+                    items[index].tracks = summary.tracks
+                    items[index].segments = summary.segments
                     items[index].etaSeconds = eta(elapsed: Date().timeIntervalSince(items[index].run.startedAt),
                                                   progress: summary.fraction,
                                                   baseline: baselines[items[index].run.workflowId])
@@ -386,9 +485,19 @@ final class RunsStore: ObservableObject {
             return RepoRuns(id: repo.id, repo: repo, runs: items,
                             detectedRuns: detectedItems, error: nil)
         } catch {
+            guard !isAbort(error) else { return nil }
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             return RepoRuns(id: repo.id, repo: repo, runs: [], detectedRuns: [], error: message)
         }
+    }
+
+    /// A request torn down by us (refresh, quit, sleep) is not a failure worth
+    /// reporting; `URLError.cancelled` reads as "cancelled" and would otherwise
+    /// render as an error row for every repo at once.
+    nonisolated private static func isAbort(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError { return urlError.code == .cancelled }
+        return false
     }
 
     private struct ProgressSummary {
@@ -396,15 +505,33 @@ final class RunsStore: ObservableObject {
         let done: Int
         let total: Int
         let currentStep: String?
+        let tracks: [RunTrack]
+        let segments: [ProgressSegment]
     }
 
     /// Averages per-job completion, using step counts to smooth out long-running jobs.
+    /// Every job that is still moving also gets its own track so parallel jobs can
+    /// be rendered as separate progress bars, split into one cell per step.
     nonisolated private static func progressSummary(for jobs: [GHJob]) -> ProgressSummary {
         var accumulated = 0.0
         var done = 0
         var currentStep: String?
+        var tracks: [RunTrack] = []
+        // Run-level fallback bar: one cell per job of the run.
+        let runSegments = jobs.map {
+            ProgressSegment(id: $0.id, state: RunState.from(status: $0.status, conclusion: $0.conclusion))
+        }
+        // Only qualify captions when the run really is fanning out.
+        let liveJobs = jobs.filter { $0.status != "completed" }.count
 
         for job in jobs {
+            let state = RunState.from(status: job.status, conclusion: job.conclusion)
+            var jobProgress: Double?
+            var caption = job.name
+            let jobSegments = (job.steps ?? []).map {
+                ProgressSegment(id: $0.number, state: RunState.from(status: $0.status, conclusion: $0.conclusion))
+            }
+
             switch job.status {
             case "completed":
                 accumulated += 1
@@ -412,21 +539,28 @@ final class RunsStore: ObservableObject {
             case "in_progress":
                 if let steps = job.steps, !steps.isEmpty {
                     let finished = steps.filter { $0.status == "completed" }.count
-                    accumulated += Double(finished) / Double(steps.count)
-                    if currentStep == nil, let running = steps.first(where: { $0.status == "in_progress" }) {
-                        currentStep = jobs.count > 1 ? "\(job.name) › \(running.name)" : running.name
+                    let fraction = Double(finished) / Double(steps.count)
+                    accumulated += fraction
+                    jobProgress = fraction
+                    if let running = steps.first(where: { $0.status == "in_progress" }) {
+                        caption = liveJobs > 1 ? "\(job.name) › \(running.name)" : running.name
                     }
                 } else {
                     accumulated += 0.5
-                    if currentStep == nil { currentStep = job.name }
                 }
             default:
                 break // queued / waiting contributes nothing
             }
+
+            guard state.isActive else { continue }
+            if currentStep == nil, state == .running { currentStep = caption }
+            tracks.append(RunTrack(id: job.id, caption: caption, progress: jobProgress,
+                                   state: state, segments: jobSegments))
         }
 
         let fraction = min(1, max(0, accumulated / Double(jobs.count)))
-        return ProgressSummary(fraction: fraction, done: done, total: jobs.count, currentStep: currentStep)
+        return ProgressSummary(fraction: fraction, done: done, total: jobs.count,
+                               currentStep: currentStep, tracks: tracks, segments: runSegments)
     }
 
     /// Prefers extrapolating from observed progress; falls back to the workflow's usual duration.
