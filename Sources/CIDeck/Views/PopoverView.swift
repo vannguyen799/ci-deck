@@ -24,6 +24,8 @@ struct PopoverView: View {
         }
         .frame(width: 400)
         .frame(height: popoverHeight)
+        .onAppear { store.popoverDidAppear() }
+        .onDisappear { store.popoverDidDisappear() }
     }
 
     /// 70% of the previously enlarged (2.5x) height, capped to the current screen.
@@ -108,7 +110,7 @@ struct PopoverView: View {
                 title: "Không có CI/CD cần chú ý",
                 message: settings.showRecentRuns
                     ? "Không có run nào khớp cấu hình hiện tại."
-                    : "Các workflow gần nhất đều thành công."
+                    : "Các workflow gần nhất đều thành công và đã xem quá 5 phút trước."
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {

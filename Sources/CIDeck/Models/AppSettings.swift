@@ -64,7 +64,8 @@ final class AppSettings: ObservableObject {
     @Published var visibleRunsPerRepo: Int = 6             { didSet { save() } }
     /// Collapse to only the newest run of each workflow.
     @Published var latestPerWorkflowOnly: Bool = true      { didSet { save() } }
-    /// Include successful/cancelled recent runs; off keeps only active and failed runs.
+    /// Include recent finished runs; off keeps only active, failed and unseen
+    /// successful runs. Cancelled runs are filtered out either way.
     @Published var showRecentRuns: Bool = false            { didSet { save() } }
     @Published var launchAtLogin: Bool = false             { didSet { save(); syncLoginItem() } }
 

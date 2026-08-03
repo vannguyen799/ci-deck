@@ -30,9 +30,74 @@ struct StatusIcon: View {
     }
 }
 
-/// Slim determinate bar used for in-flight runs.
+/// Slim bar for in-flight runs. Given segments it splits into one cell per step
+/// (or per job), the way GitHub renders a run's progress; otherwise it falls back
+/// to a single continuous fill.
 struct RunProgressBar: View {
     /// `nil` renders an indeterminate shimmer instead of a fill.
+    let value: Double?
+    /// One cell per unit of work. Empty or single-element means a plain bar.
+    var segments: [ProgressSegment] = []
+    var tint: Color = .blue
+
+    /// Beyond this many cells the gaps eat the bar, so a plain fill reads better.
+    private static let maxSegments = 40
+
+    var body: some View {
+        if segments.count > 1, segments.count <= Self.maxSegments {
+            HStack(spacing: 2) {
+                ForEach(segments) { segment in
+                    ProgressSegmentCell(state: segment.state, tint: tint)
+                }
+            }
+            .frame(height: 5)
+        } else {
+            ContinuousProgressBar(value: value, tint: tint)
+        }
+    }
+}
+
+/// One cell of a segmented bar. The step being executed right now breathes so the
+/// bar still reads as live even while no cell has flipped.
+private struct ProgressSegmentCell: View {
+    let state: RunState
+    let tint: Color
+
+    @State private var isDimmed = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+            .fill(fill)
+            .opacity(state == .running && isDimmed ? 0.4 : 1)
+            .frame(maxWidth: .infinity)
+            .onAppear { startPulsingIfNeeded() }
+            .onChange(of: state) { _ in startPulsingIfNeeded() }
+    }
+
+    private var fill: Color {
+        switch state {
+        case .success, .running:          return tint
+        case .failure:                    return .red
+        case .cancelled, .skipped,
+             .neutral:                    return Color.primary.opacity(0.22)
+        case .queued, .waiting:           return Color.primary.opacity(0.10)
+        }
+    }
+
+    private func startPulsingIfNeeded() {
+        guard state == .running else {
+            isDimmed = false
+            return
+        }
+        isDimmed = false
+        withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+            isDimmed = true
+        }
+    }
+}
+
+/// The unsegmented bar, used before GitHub reports any steps.
+private struct ContinuousProgressBar: View {
     let value: Double?
     var tint: Color = .blue
 
@@ -63,7 +128,7 @@ struct RunProgressBar: View {
             }
             .clipShape(Capsule())
         }
-        .frame(height: 4)
+        .frame(height: 5)
     }
 }
 

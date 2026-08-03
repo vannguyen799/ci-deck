@@ -30,39 +30,43 @@ struct RunRowView: View {
                     .monospacedDigit()
             }
 
-            HStack(spacing: 4) {
-                Chip(text: run.headBranch ?? "—", systemImage: "arrow.triangle.branch")
-                Chip(text: run.event)
-                Text(Fmt.clip(run.commitTitle, max: 34))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if let login = run.actor?.login {
-                    Text("@\(login)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.leading, 22)
-
+            // An in-flight run is reduced to progress bars — one per live job, so
+            // two parallel nodes read as two bars. Everything else is in the tooltip.
             if item.state.isActive {
-                VStack(alignment: .leading, spacing: 3) {
-                    RunProgressBar(value: item.progress, tint: item.state.tint)
-                    Text(progressCaption)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 7) {
+                    if item.tracks.isEmpty {
+                        progressTrack(caption: fallbackCaption,
+                                      value: item.progress,
+                                      segments: item.segments,
+                                      tint: item.state.tint)
+                    } else {
+                        ForEach(item.tracks) { track in
+                            progressTrack(caption: track.caption,
+                                          value: track.progress,
+                                          segments: track.segments,
+                                          tint: track.state.tint)
+                        }
+                    }
                 }
                 .padding(.leading, 22)
                 .padding(.top, 1)
-
-                if let jobs = item.jobs, !jobs.isEmpty {
-                    JobPipelineView(jobs: jobs)
-                        .padding(.leading, 22)
-                        .padding(.top, 3)
+            } else {
+                HStack(spacing: 4) {
+                    Chip(text: run.headBranch ?? "—", systemImage: "arrow.triangle.branch")
+                    Chip(text: run.event)
+                    Text(Fmt.clip(run.commitTitle, max: 34))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if let login = run.actor?.login {
+                        Text("@\(login)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
+                .padding(.leading, 22)
             }
         }
         .padding(.vertical, 7)
@@ -85,7 +89,7 @@ struct RunRowView: View {
                 NSPasteboard.general.setString(run.headSha, forType: .string)
             }
         }
-        .help("#\(run.runNumber) · \(run.shortSha) · \(item.state.label)")
+        .help(tooltip)
     }
 
     /// Elapsed time for active runs; total duration + age for finished ones.
@@ -99,81 +103,42 @@ struct RunRowView: View {
         return Fmt.relative(run.updatedAt, now: now)
     }
 
-    private var progressCaption: String {
-        var parts: [String] = []
+    /// Name of what is running, above its bar.
+    private func progressTrack(caption: String, value: Double?,
+                               segments: [ProgressSegment], tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(Fmt.clip(caption, max: 42))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            RunProgressBar(value: value, segments: segments, tint: tint)
+        }
+    }
+
+    /// Used before the first job payload arrives, when there is nothing to name yet.
+    private var fallbackCaption: String {
+        if let step = item.currentStep { return step }
+        return item.state == .queued ? "Đang chờ runner" : item.state.label
+    }
+
+    /// Jobs, steps and the ETA moved off the row; they stay one hover away.
+    private var tooltip: String {
+        var parts = ["#\(run.runNumber)", run.shortSha, item.state.label]
+        if let branch = run.headBranch { parts.append(branch) }
         if let done = item.jobsDone, let total = item.jobsTotal {
             parts.append("\(done)/\(total) jobs")
-        } else if item.state == .queued {
-            parts.append("Đang chờ runner")
-        }
-        if let step = item.currentStep {
-            parts.append(Fmt.clip(step, max: 38))
         }
         if let eta = item.etaSeconds {
             // The estimate was made at fetch time; keep it counting down until the next poll.
             let remaining = eta - now.timeIntervalSince(item.fetchedAt)
-            if remaining > 5 {
-                parts.append("≈ còn \(Fmt.duration(remaining))")
-            }
+            if remaining > 5 { parts.append("≈ còn \(Fmt.duration(remaining))") }
         }
-        return parts.isEmpty ? item.state.label : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
     }
 
     private func open() {
         guard let url = URL(string: run.htmlUrl) else { return }
         NSWorkspace.shared.open(url)
-    }
-}
-
-/// Compact job → step hierarchy for an active workflow run.
-private struct JobPipelineView: View {
-    let jobs: [GHJob]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(jobs) { job in
-                let state = RunState.from(status: job.status, conclusion: job.conclusion)
-                HStack(spacing: 6) {
-                    pipelineIcon(state: state)
-                    Text(job.name)
-                        .font(.system(size: 10, weight: state == .running ? .semibold : .regular))
-                        .foregroundStyle(state == .running ? .primary : .secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(state.label)
-                        .font(.system(size: 9))
-                        .foregroundStyle(state.tint)
-                }
-
-                if state == .running, let steps = job.steps {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(steps, id: \.number) { step in
-                            let stepState = RunState.from(status: step.status, conclusion: step.conclusion)
-                            HStack(spacing: 5) {
-                                Rectangle()
-                                    .fill(Color.secondary.opacity(0.25))
-                                    .frame(width: 1, height: 12)
-                                pipelineIcon(state: stepState, size: 8)
-                                Text(step.name)
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(stepState == .running ? .primary : .tertiary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-                    .padding(.leading, 7)
-                }
-            }
-        }
-        .padding(7)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func pipelineIcon(state: RunState, size: CGFloat = 9) -> some View {
-        Image(systemName: state.symbol)
-            .font(.system(size: size, weight: .semibold))
-            .foregroundStyle(state.tint)
-            .frame(width: 11)
     }
 }
 

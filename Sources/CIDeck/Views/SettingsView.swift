@@ -153,6 +153,7 @@ private struct RepositoriesSettingsTab: View {
     @State private var discoveryAccountId: String?
     @State private var discoveredRepos: [GHRepository] = []
     @State private var isDiscovering = false
+    @State private var repoFilter = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -190,9 +191,28 @@ private struct RepositoriesSettingsTab: View {
                 .help("Tải repository token có thể truy cập")
             }
 
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                TextField("Tìm owner/repo", text: $repoFilter)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                if !repoFilter.isEmpty {
+                    Button { repoFilter = "" } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 10))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary.opacity(0.5)))
+
             List(selection: $selection) {
                 Section("Đang theo dõi") {
-                    ForEach(settings.repos) { repo in
+                    ForEach(trackedRepos) { repo in
                         HStack(spacing: 6) {
                             Toggle("", isOn: enabledBinding(for: repo))
                                 .labelsHidden()
@@ -212,8 +232,14 @@ private struct RepositoriesSettingsTab: View {
                     }
                 }
 
-                if !availableRepos.isEmpty {
+                if availableRepos.isEmpty, !repoFilter.isEmpty, !discoveredRepos.isEmpty {
                     Section("Có thể thêm") {
+                        Text("Không có repo nào khớp “\(repoFilter)”.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !availableRepos.isEmpty {
+                    Section("Có thể thêm (\(availableRepos.count))") {
                         ForEach(availableRepos) { repo in
                             Button { importRepo(repo) } label: {
                                 HStack {
@@ -257,9 +283,21 @@ private struct RepositoriesSettingsTab: View {
         }
     }
 
+    /// Matches on the whole `owner/repo` slug so gõ tên org cũng ra kết quả.
+    private func matchesFilter(_ slug: String) -> Bool {
+        let query = repoFilter.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return true }
+        return slug.localizedCaseInsensitiveContains(query)
+    }
+
+    private var trackedRepos: [RepoConfig] {
+        settings.repos.filter { matchesFilter($0.id) }
+    }
+
     private var availableRepos: [GHRepository] {
         discoveredRepos.filter { candidate in
-            !settings.repos.contains { $0.id.caseInsensitiveCompare(candidate.slug) == .orderedSame }
+            matchesFilter(candidate.slug)
+                && !settings.repos.contains { $0.id.caseInsensitiveCompare(candidate.slug) == .orderedSame }
         }
     }
 
@@ -546,8 +584,9 @@ private struct GeneralSettingsTab: View {
 
             Section {
                 Text(settings.showRecentRuns
-                     ? "Popover hiện cả các run thành công, bị huỷ và bỏ qua gần đây."
-                     : "Mặc định chỉ hiện CI/CD đang chạy, đang chờ hoặc bị lỗi.")
+                     ? "Popover hiện cả các run thành công và bỏ qua gần đây. Run bị huỷ luôn được ẩn."
+                     : "Mặc định chỉ hiện CI/CD đang chạy, đang chờ, bị lỗi, và các run success chưa xem — "
+                       + "run success sẽ ẩn đi 5 phút sau lần đầu bạn mở popover thấy nó.")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 Text("Requests dùng ETag nên phần lớn lần poll trả về 304 và không bị tính vào rate limit "
