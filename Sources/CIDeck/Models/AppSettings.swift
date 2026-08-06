@@ -38,10 +38,55 @@ struct RepoConfig: Codable, Hashable, Identifiable, Sendable {
 
 struct AccountConfig: Codable, Hashable, Identifiable, Sendable {
     var id: String
+    /// The human who owns the token — what `/user` reports, even for an
+    /// organization scoped token.
     var login: String
     var label: String
+    /// Repository owners this token can actually reach. Optional so settings
+    /// written by older builds still decode.
+    var owners: [String]?
+    /// `github_pat_…` tokens are scoped to exactly one resource owner.
+    var fineGrained: Bool?
 
-    var displayName: String { label.isEmpty ? "@\(login)" : label }
+    var scopeOwners: [String] { owners ?? [] }
+
+    /// True when the token reads a single owner that is not the token's own user —
+    /// i.e. an organization scoped PAT.
+    var isOrgScoped: Bool {
+        guard scopeOwners.count == 1, let only = scopeOwners.first else { return false }
+        return only.caseInsensitiveCompare(login) != .orderedSame
+    }
+
+    var displayName: String {
+        if !label.isEmpty { return label }
+        if isOrgScoped { return scopeOwners[0] }
+        return "@\(login)"
+    }
+
+    /// Second line in the accounts list: what the token reads and who owns it.
+    var scopeDescription: String {
+        let kind = (fineGrained ?? false) ? "fine-grained" : "classic"
+        if isOrgScoped {
+            return "org \(scopeOwners[0]) · token of @\(login) · \(kind)"
+        }
+        let orgs = scopeOwners.filter { $0.caseInsensitiveCompare(login) != .orderedSame }
+        if orgs.isEmpty {
+            return "@\(login) · \(kind)"
+        }
+        if orgs.count <= 3 {
+            return "@\(login) + \(orgs.joined(separator: ", ")) · \(kind)"
+        }
+        return "@\(login) + \(orgs.count) org · \(kind)"
+    }
+
+    func reaches(owner: String) -> Bool {
+        scopeOwners.contains { $0.caseInsensitiveCompare(owner) == .orderedSame }
+    }
+
+    /// `github_pat_` is the documented prefix for fine-grained personal access tokens.
+    static func isFineGrained(token: String) -> Bool {
+        token.hasPrefix("github_pat_")
+    }
 }
 
 /// User preferences, persisted to `UserDefaults`. The GitHub token lives in the
@@ -74,8 +119,21 @@ final class AppSettings: ObservableObject {
     private var isLoading = false
 
     init() {
+        guard !DemoMode.isEnabled else {
+            loadDemoFixture()
+            return
+        }
         load()
         migrateLegacyTokenIfNeeded()
+    }
+
+    /// Fills the app with the documentation fixture. Nothing here is persisted —
+    /// `save()` is a no-op in demo mode — so the user's real settings survive.
+    private func loadDemoFixture() {
+        isLoading = true
+        accounts = DemoData.accounts
+        repos = DemoData.repos
+        isLoading = false
     }
 
     // MARK: Token
@@ -84,20 +142,22 @@ final class AppSettings: ObservableObject {
     func addAccount(token: String, login: String = "GitHub", label: String = "") throws -> AccountConfig {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SettingsError.emptyToken }
-        let account = AccountConfig(id: UUID().uuidString, login: login, label: label)
+        let account = AccountConfig(id: UUID().uuidString,
+                                    login: login,
+                                    label: label,
+                                    owners: nil,
+                                    fineGrained: AccountConfig.isFineGrained(token: trimmed))
         try Keychain.save(trimmed, account: account.id)
         accounts.append(account)
         return account
     }
 
-    func updateAccount(_ account: AccountConfig, token: String? = nil) throws {
-        if let token {
-            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { throw SettingsError.emptyToken }
-            try Keychain.save(trimmed, account: account.id)
-        }
-        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
-        accounts[index] = account
+    /// Records what the token turned out to reach, so an org scoped PAT stops
+    /// showing up as its creator's personal account.
+    func applyIdentity(_ identity: TokenIdentity, to accountId: String) {
+        guard let index = accounts.firstIndex(where: { $0.id == accountId }) else { return }
+        accounts[index].login = identity.viewer.login
+        accounts[index].owners = identity.owners
     }
 
     func removeAccount(id: String) {
@@ -118,7 +178,16 @@ final class AppSettings: ObservableObject {
 
     func resolvedAccountId(for repo: RepoConfig) -> String? {
         if let id = repo.accountId, accounts.contains(where: { $0.id == id }) { return id }
-        return accounts.first?.id
+        return accountId(reaching: repo.owner) ?? accounts.first?.id
+    }
+
+    /// The account whose token actually covers `owner`. An org scoped token wins
+    /// over a personal one that merely happens to be first in the list.
+    func accountId(reaching owner: String) -> String? {
+        if let scoped = accounts.first(where: { $0.isOrgScoped && $0.reaches(owner: owner) }) {
+            return scoped.id
+        }
+        return accounts.first { $0.reaches(owner: owner) }?.id
     }
 
     // MARK: Repo helpers
@@ -193,7 +262,7 @@ final class AppSettings: ObservableObject {
     }
 
     private func save() {
-        guard !isLoading else { return }
+        guard !isLoading, !DemoMode.isEnabled else { return }
         let payload = Payload(
             repos: repos,
             accounts: accounts,
@@ -214,7 +283,7 @@ final class AppSettings: ObservableObject {
     private func migrateLegacyTokenIfNeeded() {
         guard accounts.isEmpty,
               let token = Keychain.read(account: Keychain.legacyAccount), !token.isEmpty else { return }
-        let account = AccountConfig(id: UUID().uuidString, login: "GitHub", label: "Mặc định")
+        let account = AccountConfig(id: UUID().uuidString, login: "GitHub", label: "Default")
         guard (try? Keychain.save(token, account: account.id)) != nil else { return }
         accounts = [account]
         Keychain.delete(account: Keychain.legacyAccount)
@@ -240,7 +309,7 @@ enum SettingsError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .emptyToken: return "Token rỗng."
+        case .emptyToken: return "Token is empty."
         }
     }
 }

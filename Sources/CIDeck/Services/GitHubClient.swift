@@ -13,22 +13,22 @@ enum GitHubError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .noToken:
-            return "Chưa cấu hình GitHub token."
+            return "No GitHub token configured."
         case .badURL(let path):
-            return "URL không hợp lệ: \(path)"
+            return "Invalid URL: \(path)"
         case .unauthorized:
-            return "Token không hợp lệ hoặc đã hết hạn (401)."
+            return "Token is invalid or expired (401)."
         case .forbidden(let message):
-            return "Bị từ chối (403): \(message)"
+            return "Forbidden (403): \(message)"
         case .rateLimited(let reset):
-            guard let reset else { return "Đã chạm rate limit của GitHub." }
-            return "Chạm rate limit, thử lại sau \(Fmt.duration(reset.timeIntervalSinceNow))."
+            guard let reset else { return "GitHub rate limit reached." }
+            return "Rate limit reached, retry in \(Fmt.duration(reset.timeIntervalSinceNow))."
         case .notFound(let what):
-            return "Không tìm thấy \(what) (404) — kiểm tra tên repo hoặc quyền của token."
+            return "\(what) not found (404) — check the repository name or the token's permissions."
         case .http(let code, let message):
-            return "Lỗi HTTP \(code): \(message)"
+            return "HTTP error \(code): \(message)"
         case .decoding(let message):
-            return "Không đọc được phản hồi: \(message)"
+            return "Could not read the response: \(message)"
         }
     }
 }
@@ -85,15 +85,22 @@ actor GitHubClient {
         try await fetch(GHUser.self, path: "/user", accountId: accountId)
     }
 
-    /// Every repository the token can reach, organization repos included.
+    /// Organizations the token can see. Fine-grained tokens without the
+    /// "Organization: members" permission answer 403 here, which is not fatal —
+    /// callers treat a failure as "no organizations known from this endpoint".
+    func organizations(accountId: String?) async throws -> [GHOrganization] {
+        try await fetch([GHOrganization].self, path: "/user/orgs?per_page=100", accountId: accountId)
+    }
+
+    /// Repositories reachable through `/user/repos`.
     ///
     /// `/user/repos` returns at most 100 per page sorted by full name, so a single
     /// request silently drops everything past the first alphabetical page — which is
     /// exactly where org repos tend to sit for accounts with many personal repos.
-    func repositories(accountId: String) async throws -> [GHRepository] {
+    func repositories(accountId: String?, maxPages: Int = GitHubClient.maxRepositoryPages) async throws -> [GHRepository] {
         var all: [GHRepository] = []
         var seen = Set<Int>()
-        for page in 1...Self.maxRepositoryPages {
+        for page in 1...max(1, maxPages) {
             let path = "/user/repos?per_page=\(Self.repositoryPageSize)&page=\(page)"
                 + "&sort=full_name&direction=asc"
                 + "&affiliation=owner,collaborator,organization_member"
@@ -104,6 +111,88 @@ actor GitHubClient {
             if batch.count < Self.repositoryPageSize { break }
         }
         return all
+    }
+
+    /// Repositories listed by an organization itself.
+    ///
+    /// An org-scoped fine-grained PAT is granted repositories by the org, not by
+    /// the user's own affiliation, so `/user/repos` can come back short (or empty)
+    /// for exactly the repos the token was created for. This endpoint is the one
+    /// that reflects the grant.
+    func organizationRepositories(org: String, accountId: String?) async throws -> [GHRepository] {
+        var all: [GHRepository] = []
+        var seen = Set<Int>()
+        for page in 1...Self.maxRepositoryPages {
+            let path = "/orgs/\(org)/repos?per_page=\(Self.repositoryPageSize)&page=\(page)"
+                + "&sort=full_name&direction=asc&type=all"
+            let batch = try await fetch([GHRepository].self, path: path, accountId: accountId)
+            for repo in batch where seen.insert(repo.id).inserted {
+                all.append(repo)
+            }
+            if batch.count < Self.repositoryPageSize { break }
+        }
+        return all
+    }
+
+    /// Every repository the token can reach: the user's own listing merged with
+    /// each organization's. Per-owner failures are skipped rather than fatal, so
+    /// one org the token cannot read does not hide all the others.
+    func accessibleRepositories(accountId: String?) async throws -> [GHRepository] {
+        var all: [GHRepository] = []
+        var seen = Set<Int>()
+        var userListingError: Error?
+
+        do {
+            for repo in try await repositories(accountId: accountId) where seen.insert(repo.id).inserted {
+                all.append(repo)
+            }
+        } catch {
+            userListingError = error
+        }
+
+        for org in await knownOrganizations(accountId: accountId, seedRepositories: all, viewerLogin: nil) {
+            guard let batch = try? await organizationRepositories(org: org, accountId: accountId) else { continue }
+            for repo in batch where seen.insert(repo.id).inserted {
+                all.append(repo)
+            }
+        }
+
+        if all.isEmpty, let userListingError { throw userListingError }
+        return all
+    }
+
+    /// What the token can actually read, used to label the account.
+    func identity(accountId: String) async throws -> TokenIdentity {
+        let viewer = try await viewer(accountId: accountId)
+        // Two pages are enough to spot the owners; the full sweep happens in discovery.
+        let repos = (try? await repositories(accountId: accountId, maxPages: 2)) ?? []
+        var owners = Set(repos.map(\.owner.login))
+        owners.formUnion(await knownOrganizations(accountId: accountId,
+                                                  seedRepositories: repos,
+                                                  viewerLogin: viewer.login))
+
+        // A token that lists nothing at all still belongs to its viewer.
+        if owners.isEmpty { owners.insert(viewer.login) }
+
+        let sorted = owners.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        return TokenIdentity(viewer: viewer, owners: sorted)
+    }
+
+    /// Organizations from `/user/orgs`, plus any org that already shows up as a
+    /// repository owner — the fallback that matters when `/user/orgs` is denied.
+    private func knownOrganizations(accountId: String?,
+                                    seedRepositories: [GHRepository],
+                                    viewerLogin: String?) async -> [String] {
+        var logins = Set(seedRepositories.map(\.owner.login))
+        if let orgs = try? await organizations(accountId: accountId) {
+            logins.formUnion(orgs.map(\.login))
+        }
+        var viewer = viewerLogin
+        if viewer == nil, let accountId {
+            viewer = try? await self.viewer(accountId: accountId).login
+        }
+        if let viewer { logins.remove(viewer) }
+        return logins.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     func workflows(owner: String, repo: String, accountId: String?) async throws -> [GHWorkflow] {
@@ -149,7 +238,7 @@ actor GitHubClient {
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw GitHubError.http(-1, "Phản hồi không hợp lệ")
+            throw GitHubError.http(-1, "Invalid response")
         }
         captureRateLimit(from: http)
 
@@ -165,7 +254,7 @@ actor GitHubClient {
             guard let cached = bodies[cacheKey] else {
                 // ETag without a cached body (e.g. after a decode failure). Retry unconditionally.
                 etags.removeValue(forKey: cacheKey)
-                guard allowRetry else { throw GitHubError.http(304, "Không có bản cache") }
+                guard allowRetry else { throw GitHubError.http(304, "No cached copy") }
                 return try await fetch(type, path: path, accountId: accountId, allowRetry: false)
             }
             return try decode(type, from: cached)

@@ -26,7 +26,7 @@ struct CIDeckApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("CIDeck — Cấu hình", id: SettingsWindow.id) {
+        Window("CIDeck — Settings", id: SettingsWindow.id) {
             SettingsView()
                 .environmentObject(settings)
                 .environmentObject(store)
@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `swift run` builds have no Info.plist to read it from.
         NSApp.setActivationPolicy(.accessory)
         _ = NotificationService.shared
+        ScreenshotRunner.runIfNeeded()
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }

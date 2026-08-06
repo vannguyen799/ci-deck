@@ -79,7 +79,7 @@ struct RunRowView: View {
         .onHover { isHovering = $0 }
         .onTapGesture { open() }
         .contextMenu {
-            Button("Mở trong GitHub") { open() }
+            Button("Open in GitHub") { open() }
             Button("Copy link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(run.htmlUrl, forType: .string)
@@ -118,7 +118,7 @@ struct RunRowView: View {
     /// Used before the first job payload arrives, when there is nothing to name yet.
     private var fallbackCaption: String {
         if let step = item.currentStep { return step }
-        return item.state == .queued ? "Đang chờ runner" : item.state.label
+        return item.state == .queued ? "Waiting for runner" : item.state.label
     }
 
     /// Jobs, steps and the ETA moved off the row; they stay one hover away.
@@ -131,7 +131,7 @@ struct RunRowView: View {
         if let eta = item.etaSeconds {
             // The estimate was made at fetch time; keep it counting down until the next poll.
             let remaining = eta - now.timeIntervalSince(item.fetchedAt)
-            if remaining > 5 { parts.append("≈ còn \(Fmt.duration(remaining))") }
+            if remaining > 5 { parts.append("≈ \(Fmt.duration(remaining)) left") }
         }
         return parts.joined(separator: " · ")
     }
