@@ -290,7 +290,7 @@ enum AggregateStatus: Equatable, Sendable {
         }
     }
 
-    /// Small glyph shown next to the CI mark. `.running` is left out because the
+    /// Small glyph shown beside the CI mark. `.running` is left out because the
     /// mark's arc already spins, and `.idle` because a quiet bar is the point.
     var accessorySymbol: String? {
         switch self {
@@ -302,7 +302,7 @@ enum AggregateStatus: Equatable, Sendable {
     var badge: String? {
         switch self {
         case .running(let n): return n > 1 ? "\(n)" : nil
-        case .failure(let n): return n > 1 ? "\(n)" : nil
+        case .failure(let n): return "\(n)"
         default:              return nil
         }
     }
