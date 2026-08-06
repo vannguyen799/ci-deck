@@ -78,6 +78,10 @@ chmod +x scripts/build-app.sh
 open build/CIDeck.app
 ```
 
+Prebuilt versions are published on the repository's **Releases** page. A tag such
+as `v0.0.1` triggers GitHub Actions to build the app, create a ZIP archive and
+publish its SHA-256 checksum alongside the release.
+
 The app is signed ad hoc, so macOS may block its first launch. Choose **System Settings → Privacy & Security → Open Anyway**.
 
 For quick development:
