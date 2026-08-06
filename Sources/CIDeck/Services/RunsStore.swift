@@ -170,15 +170,15 @@ final class RunsStore: ObservableObject {
     private func observeSystemSleep() {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.willSleepNotification,
-                           object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
+                           object: nil, queue: .main) { _ in
+            Task { @MainActor [weak self] in
                 self?.isAsleep = true
                 self?.stop()
             }
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification,
-                           object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
+                           object: nil, queue: .main) { _ in
+            Task { @MainActor [weak self] in
                 self?.isAsleep = false
                 self?.refreshNow()
             }
@@ -188,8 +188,8 @@ final class RunsStore: ObservableObject {
     private func observeSettings() {
         settings.objectWillChange
             .debounce(for: .milliseconds(600), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                Task { @MainActor in
+            .sink { _ in
+                Task { @MainActor [weak self] in
                     guard let self, !self.isAsleep else { return }
                     self.refreshNow()
                 }
