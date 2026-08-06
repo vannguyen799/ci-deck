@@ -30,6 +30,7 @@ struct PopoverView: View {
 
     /// 70% of the previously enlarged (2.5x) height, capped to the current screen.
     private var popoverHeight: CGFloat {
+        if DemoMode.isEnabled { return DemoMode.popoverHeight }
         let desired: CGFloat = 540 * 2.5 * 0.7
         let available = (NSScreen.main?.visibleFrame.height ?? desired) - 24
         return min(desired, max(540, available))
@@ -54,17 +55,17 @@ struct PopoverView: View {
 
             Spacer()
 
-            IconButton(systemImage: "arrow.clockwise", help: "Refresh ngay") {
+            IconButton(systemImage: "arrow.clockwise", help: "Refresh now") {
                 store.refreshNow()
             }
-            IconButton(systemImage: "gearshape", help: "Cấu hình repo & workflow") {
+            IconButton(systemImage: "gearshape", help: "Configure repositories & workflows") {
                 openSettings()
             }
             Menu {
-                Button("Cấu hình…") { openSettings() }
+                Button("Settings…") { openSettings() }
                 Button("Refresh") { store.refreshNow() }
                 Divider()
-                Button("Thoát CIDeck") { NSApplication.shared.terminate(nil) }
+                Button("Quit CIDeck") { NSApplication.shared.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 12, weight: .medium))
@@ -84,33 +85,33 @@ struct PopoverView: View {
         if !settings.hasToken {
             EmptyStateView(
                 systemImage: "key.horizontal",
-                title: "Chưa kết nối GitHub",
-                message: "Thêm Personal Access Token (scope actions:read) để CIDeck đọc được workflow runs.",
-                actionTitle: "Mở cấu hình",
+                title: "GitHub not connected",
+                message: "Add a Personal Access Token with Actions read permission so CIDeck can load workflow runs.",
+                actionTitle: "Open Settings",
                 action: { openSettings() }
             )
         } else if settings.repos.filter(\.enabled).isEmpty {
             EmptyStateView(
                 systemImage: "folder.badge.plus",
-                title: "Chưa chọn repo nào",
-                message: "Thêm repo dạng owner/repo rồi chọn các workflow muốn theo dõi.",
-                actionTitle: "Thêm repo",
+                title: "No repositories selected",
+                message: "Add a repository as owner/repo, then choose workflows to monitor.",
+                actionTitle: "Add Repository",
                 action: { openSettings() }
             )
         } else if store.repoStates.isEmpty && store.lastRefresh == nil {
             EmptyStateView(
                 systemImage: "clock.arrow.circlepath",
-                title: "Đang tải…",
-                message: "Đang lấy workflow runs từ GitHub."
+                title: "Loading…",
+                message: "Loading workflow runs from GitHub."
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else if visibleRepoStates.isEmpty {
             EmptyStateView(
                 systemImage: "checkmark.circle",
-                title: "Không có CI/CD cần chú ý",
+                title: "No CI/CD needs attention",
                 message: settings.showRecentRuns
-                    ? "Không có run nào khớp cấu hình hiện tại."
-                    : "Các workflow gần nhất đều thành công và đã xem quá 5 phút trước."
+                    ? "No run matches the current configuration."
+                    : "The latest workflows all succeeded and were seen more than 5 minutes ago."
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {
@@ -156,7 +157,7 @@ struct PopoverView: View {
             }
             Spacer()
             if state.hasActive {
-                Text("\(state.runs.filter { $0.state.isActive }.count) đang chạy")
+                Text("\(state.runs.filter { $0.state.isActive }.count) running")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.blue)
             }
@@ -166,7 +167,7 @@ struct PopoverView: View {
         .background(.regularMaterial)
         .contentShape(Rectangle())
         .onTapGesture { toggleRepo(state.id) }
-        .help(collapsedRepoIds.contains(state.id) ? "Mở rộng repo" : "Thu gọn repo")
+        .help(collapsedRepoIds.contains(state.id) ? "Expand repository" : "Collapse repository")
     }
 
     private func toggleRepo(_ id: String) {
@@ -196,9 +197,9 @@ struct PopoverView: View {
     private var footer: some View {
         HStack(spacing: 6) {
             if let last = store.lastRefresh {
-                Text("Cập nhật \(Fmt.relative(last))")
+                Text("Updated \(Fmt.relative(last))")
             } else {
-                Text("Chưa cập nhật")
+                Text("Not updated yet")
             }
 
             Spacer()

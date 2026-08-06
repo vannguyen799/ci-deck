@@ -1,2 +1,68 @@
-/* Vietnamese is the source language; explicit entry keeps the localization visible to macOS. */
-"Chung" = "Chung";
+/* English fallback for the Vietnamese locale. Keys are the source strings from the code. */
+
+/* Menu bar popover */
+"Settings…" = "Settings…";
+"Refresh" = "Refresh";
+"Quit CIDeck" = "Quit CIDeck";
+"%lld running" = "%lld running";
+"Updated %@" = "Updated %@";
+"Not updated yet" = "Not updated yet";
+
+/* Run row context menu */
+"Open in GitHub" = "Open in GitHub";
+"Copy link" = "Copy link";
+"Copy commit SHA" = "Copy commit SHA";
+
+/* Settings window */
+"CIDeck — Settings" = "CIDeck — Settings";
+"GitHub" = "GitHub";
+"Repositories" = "Repositories";
+"General" = "General";
+
+/* GitHub tab */
+"GitHub accounts" = "GitHub accounts";
+"Just paste a token; CIDeck detects which owners it can read. A fine-grained token issued to an organization shows that org's name rather than the username that created it — GitHub always returns the username at /user, so that name alone cannot tell two tokens apart. Tokens are stored separately in the macOS Keychain; each repository can pick its own token in the Repositories tab." = "Just paste a token; CIDeck detects which owners it can read. A fine-grained token issued to an organization shows that org's name rather than the username that created it — GitHub always returns the username at /user, so that name alone cannot tell two tokens apart. Tokens are stored separately in the macOS Keychain; each repository can pick its own token in the Repositories tab.";
+"Scope not detected — click refresh" = "Scope not detected — click refresh";
+"Re-detect the token's scope" = "Re-detect the token's scope";
+"Remove the account and its token" = "Remove the account and its token";
+"Add account" = "Add account";
+"ghp_… or github_pat_…" = "ghp_… or github_pat_…";
+"Display name (optional)" = "Display name (optional)";
+"Add & Verify" = "Add & Verify";
+"Verifying…" = "Verifying…";
+"Connected: %@" = "Connected: %@";
+"Create a token on GitHub →" = "Create a token on GitHub →";
+
+/* Repositories tab */
+"Load repositories the token can reach" = "Load repositories the token can reach";
+"Search owner/repo" = "Search owner/repo";
+"Monitored" = "Monitored";
+"Available" = "Available";
+"Available (%lld)" = "Available (%lld)";
+"No repository matches “%@”." = "No repository matches “%@”.";
+"Add" = "Add";
+"Remove selected repository" = "Remove selected repository";
+"Select a repository to configure workflows." = "Select a repository to configure workflows.";
+"Reload the workflow list" = "Reload the workflow list";
+"Account:" = "Account:";
+"Branch:" = "Branch:";
+"empty = all" = "empty = all";
+"Monitored workflows" = "Monitored workflows";
+"Monitoring all" = "Monitoring all";
+"Select all" = "Select all";
+"No workflows loaded. Click refresh above." = "No workflows loaded. Click refresh above.";
+"Selecting nothing = monitor every workflow in the repository." = "Selecting nothing = monitor every workflow in the repository.";
+"Monitoring %lld workflows." = "Monitoring %lld workflows.";
+
+/* General tab */
+"Launch at login" = "Launch at login";
+"Notify when a new CI/CD run starts" = "Notify when a new CI/CD run starts";
+"Only show the latest run per workflow" = "Only show the latest run per workflow";
+"Show recent CI/CD runs" = "Show recent CI/CD runs";
+"Refresh frequency" = "Refresh frequency";
+"While a run is active" = "While a run is active";
+"While idle" = "While idle";
+"Display" = "Display";
+"Runs loaded per repository" = "Runs loaded per repository";
+"Runs shown in popover" = "Runs shown in popover";
+"The popover also lists recent successful and skipped runs. Cancelled runs stay hidden." = "The popover also lists recent successful and skipped runs. Cancelled runs stay hidden.";

@@ -47,6 +47,19 @@ final class RunsStore: ObservableObject {
 
     func start() {
         guard loop == nil else { return }
+        guard !DemoMode.isEnabled else {
+            loadDemoSnapshot()
+            loop = Task { [weak self] in
+                // Still ticks, so elapsed timers and the spinner stay alive.
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    self.loadDemoSnapshot()
+                    await self.waitForNextTick()
+                }
+            }
+            return
+        }
+        Task { await backfillAccountIdentities() }
         if settings.notificationsEnabled {
             Task {
                 let granted = await NotificationService.shared.requestAuthorization()
@@ -188,6 +201,10 @@ final class RunsStore: ObservableObject {
 
     func refresh() async {
         wantsImmediateRefresh = false
+        guard !DemoMode.isEnabled else {
+            loadDemoSnapshot()
+            return
+        }
         guard settings.hasToken else {
             repoStates = []
             globalError = nil
@@ -282,6 +299,15 @@ final class RunsStore: ObservableObject {
         knownRunIds.formUnion(currentIds)
     }
 
+    /// Publishes the documentation fixture instead of polling GitHub.
+    private func loadDemoSnapshot() {
+        repoStates = DemoData.repoStates()
+        workflowCatalog = DemoData.workflowCatalog
+        rateLimit = DemoData.rateLimit
+        lastRefresh = Date()
+        globalError = nil
+    }
+
     private func loadMissingCatalogs(for repos: [RepoConfig]) async {
         let missing = repos.filter { workflowCatalog[$0.id] == nil }
         guard !missing.isEmpty else { return }
@@ -295,6 +321,10 @@ final class RunsStore: ObservableObject {
 
     /// Forces a catalog reload — used by the settings screen's refresh button.
     func reloadWorkflows(for repo: RepoConfig) async throws {
+        if DemoMode.isEnabled {
+            workflowCatalog[repo.id] = DemoData.workflowCatalog[repo.id] ?? []
+            return
+        }
         let list = try await client.workflows(owner: repo.owner, repo: repo.name,
                                               accountId: settings.resolvedAccountId(for: repo))
         workflowCatalog[repo.id] = list.sorted { $0.name < $1.name }
@@ -304,13 +334,27 @@ final class RunsStore: ObservableObject {
         workflowCatalog.removeValue(forKey: repoId)
     }
 
-    func validateToken(accountId: String) async throws -> GHUser {
+    /// Accounts stored before scope detection existed carry no owners, so they all
+    /// read as the token's user. Fill them in once, quietly, at launch.
+    private func backfillAccountIdentities() async {
+        for account in settings.accounts where account.scopeOwners.isEmpty {
+            guard let identity = try? await client.identity(accountId: account.id) else { continue }
+            settings.applyIdentity(identity, to: account.id)
+        }
+    }
+
+    /// Checks the token and works out which owner it really reads.
+    @discardableResult
+    func validateToken(accountId: String) async throws -> TokenIdentity {
         await client.resetCache()
-        return try await client.viewer(accountId: accountId)
+        let identity = try await client.identity(accountId: accountId)
+        settings.applyIdentity(identity, to: accountId)
+        return identity
     }
 
     func discoverRepositories(accountId: String) async throws -> [GHRepository] {
-        try await client.repositories(accountId: accountId)
+        if DemoMode.isEnabled { return DemoData.discoverableRepositories }
+        return try await client.accessibleRepositories(accountId: accountId)
             .filter { !$0.archived }
             .sorted { $0.slug.localizedCaseInsensitiveCompare($1.slug) == .orderedAscending }
     }

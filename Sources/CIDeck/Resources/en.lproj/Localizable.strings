@@ -1,46 +1,5 @@
-"GitHub" = "GitHub";
-"Repositories" = "Repositories";
-"Chung" = "General";
-"Cấu hình…" = "Settings…";
-"Thoát CIDeck" = "Quit CIDeck";
-"Chưa kết nối GitHub" = "GitHub not connected";
-"Thêm Personal Access Token (scope actions:read) để CIDeck đọc được workflow runs." = "Add a Personal Access Token with Actions read permission so CIDeck can load workflow runs.";
-"Mở cấu hình" = "Open Settings";
-"Chưa chọn repo nào" = "No repositories selected";
-"Thêm repo dạng owner/repo rồi chọn các workflow muốn theo dõi." = "Add a repository as owner/repo, then choose workflows to monitor.";
-"Thêm repo" = "Add Repository";
-"Đang tải…" = "Loading…";
-"Đang lấy workflow runs từ GitHub." = "Loading workflow runs from GitHub.";
-"Không có CI/CD cần chú ý" = "No CI/CD needs attention";
-"Chưa cập nhật" = "Not updated yet";
-"GitHub accounts" = "GitHub accounts";
-"Thêm account" = "Add account";
-"Thêm & kiểm tra" = "Add & Verify";
-"Tạo token trên GitHub →" = "Create a token on GitHub →";
-"Đang kiểm tra…" = "Verifying…";
-"Đang theo dõi" = "Monitored";
-"Có thể thêm" = "Available";
-"Thêm" = "Add";
-"Xoá repo đang chọn" = "Remove selected repository";
-"Chọn một repo để cấu hình workflow." = "Select a repository to configure workflows.";
-"Account:" = "Account:";
-"Branch:" = "Branch:";
-"để trống = tất cả" = "empty = all";
-"Workflows theo dõi" = "Monitored workflows";
-"Đang theo dõi tất cả" = "Monitoring all";
-"Chọn tất cả" = "Select all";
-"Chưa tải được workflow nào. Bấm nút refresh phía trên." = "No workflows loaded. Click refresh above.";
-"Khởi động cùng macOS" = "Launch at login";
-"Thông báo khi có CI/CD mới" = "Notify when a new CI/CD run starts";
-"Chỉ hiện run mới nhất của mỗi workflow" = "Only show the latest run per workflow";
-"Hiện các CI/CD gần đây" = "Show recent CI/CD runs";
-"Tần suất cập nhật" = "Refresh frequency";
-"Khi có run đang chạy" = "While a run is active";
-"Khi rảnh" = "While idle";
-"Hiển thị" = "Display";
-"Số run tải mỗi repo" = "Runs loaded per repository";
-"Số run hiện trong popover" = "Runs shown in popover";
-"Mở trong GitHub" = "Open in GitHub";
-"Copy link" = "Copy link";
-"Copy commit SHA" = "Copy commit SHA";
-"Đang chờ runner" = "Waiting for runner";
+/* English is the source language: every key in the code is already the English
+   string, so this table stays empty on purpose. It still has to exist — without
+   an en.lproj macOS may resolve an English system to vi.lproj, the only other
+   localization in the bundle, and show Vietnamese. With it, lookups miss here
+   and NSBundle returns the key, which is the English text. */

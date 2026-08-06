@@ -11,6 +11,21 @@ struct GHUser: Codable, Hashable, Sendable {
     let avatarUrl: String?
 }
 
+struct GHOrganization: Codable, Hashable, Sendable {
+    let login: String
+}
+
+/// What a token actually reaches, as opposed to who created it.
+///
+/// `/user` always answers with the human who owns the token — an organization
+/// scoped fine-grained PAT included — so the login alone cannot tell two tokens
+/// apart. The set of owners whose repositories the token can list can.
+struct TokenIdentity: Sendable, Hashable {
+    let viewer: GHUser
+    /// Distinct repository owners (the user and/or organizations) reachable.
+    let owners: [String]
+}
+
 struct GHRepository: Codable, Hashable, Identifiable, Sendable {
     struct Owner: Codable, Hashable, Sendable { let login: String }
 

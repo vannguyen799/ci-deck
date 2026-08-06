@@ -25,7 +25,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     func notifyNewRun(_ item: RunItem, repository: String) {
         guard isAvailable else { return }
         let content = UNMutableNotificationContent()
-        content.title = "CI/CD mới · \(repository)"
+        content.title = "New CI/CD · \(repository)"
         content.subtitle = item.workflowName
         let branch = item.run.headBranch ?? "unknown branch"
         content.body = "#\(item.run.runNumber) · \(branch) · \(item.run.commitTitle)"
