@@ -58,7 +58,7 @@ Click a run to open it on GitHub. Right-click for *Copy link* or *Copy commit SH
 
 ![Menu bar icon states](docs/menubar-states.png)
 
-macOS renders status item images as templates, so color may be ignored. Each state therefore uses a distinct **shape**: the “CI” arc spins while runs are active, other states add a dedicated SF Symbol, and a badge appears when more than one run needs attention.
+macOS renders status item images as templates, so color may be ignored. Each state therefore uses a distinct **shape**: the “CI” arc spins while runs are active, other states add a dedicated SF Symbol, and counts appear beside the mark when useful.
 
 ## Requirements
 

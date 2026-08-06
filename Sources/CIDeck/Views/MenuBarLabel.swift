@@ -3,9 +3,9 @@ import SwiftUI
 /// The menu bar extra itself: CIDeck's own "CI" mark, tinted by state.
 ///
 /// macOS renders status item images as template art, so colour alone can't carry
-/// meaning here — the mark's arc spins while runs are in flight, other states add a
-/// distinct SF Symbol beside it, plus a count badge when more than one run needs
-/// attention.
+/// meaning here. The mark's arc spins while runs are in flight, with one compact
+/// indicator beside it. A count takes precedence over the state symbol, so a red
+/// state reads simply as a red CI mark plus its failure count.
 @MainActor
 struct MenuBarLabel: View {
     let status: AggregateStatus
@@ -13,15 +13,21 @@ struct MenuBarLabel: View {
     @State private var angle: Double = 0
 
     var body: some View {
-        HStack(spacing: 2.5) {
+        HStack(spacing: 2) {
             CIMark(spin: isRunning ? angle : 0)
-            if let symbol = status.accessorySymbol {
-                Image(systemName: symbol).font(.system(size: 9, weight: .bold))
-            }
+
             if let badge = status.badge {
-                Text(badge).font(.system(size: 11, weight: .semibold))
+                Text(badge)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            } else if let symbol = status.accessorySymbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 8, weight: .bold))
+                    .symbolRenderingMode(.monochrome)
             }
         }
+        .frame(height: 18)
+        .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(status.tint)
         .onAppear { spinIfNeeded() }
         .onChange(of: status) { _ in spinIfNeeded() }
