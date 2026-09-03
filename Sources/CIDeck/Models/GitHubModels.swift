@@ -203,6 +203,13 @@ extension GHRun {
 
     var shortSha: String { String(headSha.prefix(7)) }
 
+    /// Identity used when collapsing to "the latest run".
+    ///
+    /// The same workflow running on two branches is two independent stories, so
+    /// the branch is part of the key: collapsing on `workflowId` alone would let
+    /// whichever branch pushed last hide every other branch's run.
+    var workflowBranchKey: String { "\(workflowId)@\(headBranch ?? "")" }
+
     var commitTitle: String {
         guard let message = headCommit?.message, !message.isEmpty else { return shortSha }
         return message.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? shortSha
@@ -268,6 +275,31 @@ struct RepoRuns: Identifiable, Sendable {
     var error: String?
 
     var hasActive: Bool { runs.contains { $0.state.isActive } }
+
+    /// Runs grouped by head branch, keeping the newest-first order they arrived in
+    /// both between groups and inside them. One workflow watched across several
+    /// branches therefore reads as one foldable box per branch.
+    var branchGroups: [BranchRuns] {
+        var order: [String] = []
+        var buckets: [String: [RunItem]] = [:]
+        for item in runs {
+            let branch = item.run.headBranch ?? "\u{2014}"
+            if buckets[branch] == nil { order.append(branch) }
+            buckets[branch, default: []].append(item)
+        }
+        return order.map { BranchRuns(id: "\(id)@\($0)", branch: $0, runs: buckets[$0] ?? []) }
+    }
+}
+
+/// The runs of one repository that share a head branch.
+struct BranchRuns: Identifiable, Sendable {
+    /// "owner/name@branch" — stable across refreshes and unique across repos.
+    let id: String
+    let branch: String
+    var runs: [RunItem]
+
+    var activeCount: Int { runs.filter { $0.state.isActive }.count }
+    var hasFailure: Bool { runs.contains { $0.state == .failure } }
 }
 
 /// What the menu bar icon should communicate at a glance.

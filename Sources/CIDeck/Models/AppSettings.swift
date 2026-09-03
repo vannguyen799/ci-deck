@@ -107,7 +107,7 @@ final class AppSettings: ObservableObject {
     @Published var runsPerRepo: Int = 30                   { didSet { save() } }
     /// How many runs to actually render per repository.
     @Published var visibleRunsPerRepo: Int = 6             { didSet { save() } }
-    /// Collapse to only the newest run of each workflow.
+    /// Collapse to only the newest run of each workflow on each branch.
     @Published var latestPerWorkflowOnly: Bool = true      { didSet { save() } }
     /// Include recent finished runs; off keeps only active, failed and unseen
     /// successful runs. Cancelled runs are filtered out either way.

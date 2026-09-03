@@ -620,7 +620,7 @@ private struct GeneralSettingsTab: View {
             Section {
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                 Toggle("Notify when a new CI/CD run starts", isOn: notificationBinding)
-                Toggle("Only show the latest run per workflow", isOn: $settings.latestPerWorkflowOnly)
+                Toggle("Only show the latest run per workflow and branch", isOn: $settings.latestPerWorkflowOnly)
                 Toggle("Show recent CI/CD runs", isOn: $settings.showRecentRuns)
             }
 

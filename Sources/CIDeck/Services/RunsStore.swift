@@ -396,12 +396,12 @@ final class RunsStore: ObservableObject {
         let active = all.filter { $0.state.isActive }
         if !active.isEmpty { return .running(active.count) }
 
-        // Only the newest run of each workflow decides red vs green.
-        var newest: [Int: RunItem] = [:]
+        // Only the newest run of each workflow/branch pair decides red vs green.
+        var newest: [String: RunItem] = [:]
         for item in all {
-            let existing = newest[item.run.workflowId]
+            let existing = newest[item.run.workflowBranchKey]
             if existing == nil || item.run.runNumber > existing!.run.runNumber {
-                newest[item.run.workflowId] = item
+                newest[item.run.workflowBranchKey] = item
             }
         }
         let failing = newest.values.filter { $0.state == .failure }
@@ -464,10 +464,11 @@ final class RunsStore: ObservableObject {
                         etaSeconds: nil)
             }
             if !options.showRecentRuns {
-                // Only the actual latest run matters. Do this before filtering by state so
-                // an old failure is hidden once a newer run succeeds.
-                var seen = Set<Int>()
-                filtered = filtered.filter { seen.insert($0.workflowId).inserted }
+                // Only the actual latest run of each workflow *on each branch* matters.
+                // Do this before filtering by state so an old failure is hidden once a
+                // newer run on the same branch succeeds.
+                var seen = Set<String>()
+                filtered = filtered.filter { seen.insert($0.workflowBranchKey).inserted }
                 let now = Date()
                 filtered = filtered.filter { run in
                     if run.state.isActive || run.state == .failure { return true }
@@ -479,8 +480,8 @@ final class RunsStore: ObservableObject {
                     return now.timeIntervalSince(seenAt) < Self.recentSuccessWindow
                 }
             } else if options.latestPerWorkflowOnly {
-                var seen = Set<Int>()
-                filtered = filtered.filter { seen.insert($0.workflowId).inserted }
+                var seen = Set<String>()
+                filtered = filtered.filter { seen.insert($0.workflowBranchKey).inserted }
             }
             let visible = Array(filtered.prefix(options.visibleRunsPerRepo))
 

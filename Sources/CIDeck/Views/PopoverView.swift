@@ -8,6 +8,8 @@ struct PopoverView: View {
     @EnvironmentObject private var store: RunsStore
     @Environment(\.openWindow) private var openWindow
     @State private var collapsedRepoIds = Set<String>()
+    /// "owner/name@branch" of every branch box the user has folded away.
+    @State private var collapsedBranchIds = Set<String>()
 
     private var visibleRepoStates: [RepoRuns] {
         store.repoStates.filter { !$0.runs.isEmpty || $0.error != nil }
@@ -123,9 +125,7 @@ struct PopoverView: View {
                                 if let error = state.error {
                                     errorRow(error)
                                 } else {
-                                    ForEach(state.runs) { item in
-                                        LiveRunRowView(item: item)
-                                    }
+                                    repoBody(state)
                                 }
                             }
                         } header: {
@@ -137,6 +137,83 @@ struct PopoverView: View {
                 .padding(.vertical, 6)
             }
             .scrollIndicators(.automatic)
+        }
+    }
+
+    /// A single branch needs no box around it; several get one apiece so each can
+    /// be folded away without hiding the rest of the repository.
+    @ViewBuilder
+    private func repoBody(_ state: RepoRuns) -> some View {
+        let groups = state.branchGroups
+        if groups.count > 1 {
+            ForEach(groups) { group in
+                VStack(alignment: .leading, spacing: 2) {
+                    branchHeader(group)
+                    if !collapsedBranchIds.contains(group.id) {
+                        ForEach(group.runs) { item in
+                            LiveRunRowView(item: item)
+                        }
+                    }
+                }
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(0.035))
+                )
+                .padding(.bottom, 3)
+            }
+        } else {
+            ForEach(state.runs) { item in
+                LiveRunRowView(item: item)
+            }
+        }
+    }
+
+    private func branchHeader(_ group: BranchRuns) -> some View {
+        let isCollapsed = collapsedBranchIds.contains(group.id)
+        return HStack(spacing: 5) {
+            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 9)
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            Text(group.branch)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 6)
+            if group.activeCount > 0 {
+                Text("\(group.activeCount) running")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.blue)
+            } else if group.hasFailure {
+                Image(systemName: "xmark.octagon.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.red)
+            }
+            // Collapsed boxes still say how much they are hiding.
+            if isCollapsed {
+                Text("\(group.runs.count)")
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { toggleBranch(group.id) }
+        .help(isCollapsed ? "Expand branch" : "Collapse branch")
+    }
+
+    private func toggleBranch(_ id: String) {
+        if collapsedBranchIds.contains(id) {
+            collapsedBranchIds.remove(id)
+        } else {
+            collapsedBranchIds.insert(id)
         }
     }
 
