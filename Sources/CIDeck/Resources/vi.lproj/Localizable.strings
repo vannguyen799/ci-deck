@@ -12,6 +12,8 @@
 "Open in GitHub" = "Open in GitHub";
 "Copy link" = "Copy link";
 "Copy commit SHA" = "Copy commit SHA";
+"Re-run workflow" = "Re-run workflow";
+"Re-run failed jobs" = "Re-run failed jobs";
 
 /* Settings window */
 "CIDeck — Settings" = "CIDeck — Settings";

@@ -21,6 +21,10 @@ struct PopoverView: View {
             Divider()
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let error = store.actionError {
+                Divider()
+                actionErrorBanner(error)
+            }
             Divider()
             footer
         }
@@ -88,7 +92,7 @@ struct PopoverView: View {
             EmptyStateView(
                 systemImage: "key.horizontal",
                 title: "GitHub not connected",
-                message: "Add a Personal Access Token with Actions read permission so CIDeck can load workflow runs.",
+                message: "Add a Personal Access Token with Actions read permission (plus write to re-run workflows) so CIDeck can load workflow runs.",
                 actionTitle: "Open Settings",
                 action: { openSettings() }
             )
@@ -151,7 +155,7 @@ struct PopoverView: View {
                     branchHeader(group)
                     if !collapsedBranchIds.contains(group.id) {
                         ForEach(group.runs) { item in
-                            LiveRunRowView(item: item)
+                            LiveRunRowView(item: item, repo: state.repo)
                         }
                     }
                 }
@@ -164,7 +168,7 @@ struct PopoverView: View {
             }
         } else {
             ForEach(state.runs) { item in
-                LiveRunRowView(item: item)
+                LiveRunRowView(item: item, repo: state.repo)
             }
         }
     }
@@ -264,6 +268,26 @@ struct PopoverView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    /// Re-run failures land here rather than in the per-repo error slot, which
+    /// belongs to the polling loop.
+    private func actionErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            IconButton(systemImage: "xmark", help: "Dismiss", size: 18) {
+                store.actionError = nil
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)

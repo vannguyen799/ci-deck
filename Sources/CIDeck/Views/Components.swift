@@ -156,6 +156,8 @@ struct Chip: View {
 struct IconButton: View {
     let systemImage: String
     var help: String = ""
+    /// Side of the square hit area; the glyph scales with it.
+    var size: CGFloat = 22
     let action: () -> Void
 
     @State private var isHovering = false
@@ -163,10 +165,10 @@ struct IconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .frame(width: 22, height: 22)
+                .font(.system(size: size * 0.55, weight: .medium))
+                .frame(width: size, height: size)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
                         .fill(isHovering ? Color.primary.opacity(0.10) : .clear)
                 )
                 .contentShape(Rectangle())

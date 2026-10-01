@@ -262,6 +262,12 @@ struct RunItem: Identifiable, Hashable, Sendable {
 
     var id: Int { run.id }
     var state: RunState { run.state }
+
+    /// GitHub only accepts a re-run once the run has finished.
+    var canRerun: Bool { !state.isActive }
+
+    /// `rerun-failed-jobs` only makes sense when something actually failed.
+    var canRerunFailedJobs: Bool { state == .failure }
 }
 
 /// Per-repository slice of the popover list.

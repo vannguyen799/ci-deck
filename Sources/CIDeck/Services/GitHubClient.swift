@@ -218,29 +218,24 @@ actor GitHubClient {
         return list.jobs
     }
 
+    /// Re-runs a finished run. `failedJobsOnly` keeps the jobs that already
+    /// succeeded and only replays the failed ones.
+    ///
+    /// Needs a token with Actions **write** access; a read-only token gets a 403.
+    func rerun(owner: String, repo: String, runId: Int, failedJobsOnly: Bool, accountId: String?) async throws {
+        let endpoint = failedJobsOnly ? "rerun-failed-jobs" : "rerun"
+        try await post(path: "/repos/\(owner)/\(repo)/actions/runs/\(runId)/\(endpoint)", accountId: accountId)
+    }
+
     // MARK: - Transport
 
     private func fetch<T: Decodable>(_ type: T.Type, path: String, accountId: String?, allowRetry: Bool = true) async throws -> T {
-        guard let token = tokenProvider(accountId), !token.isEmpty else { throw GitHubError.noToken }
-        guard let url = URL(string: "https://api.github.com" + path) else { throw GitHubError.badURL(path) }
+        var request = try makeRequest(path: path, method: "GET", accountId: accountId)
         let cacheKey = "\(accountId ?? "none"):\(path)"
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        request.setValue("CIDeck/1.0", forHTTPHeaderField: "User-Agent")
         if let etag = etags[cacheKey] {
             request.setValue(etag, forHTTPHeaderField: "If-None-Match")
         }
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw GitHubError.http(-1, "Invalid response")
-        }
-        captureRateLimit(from: http)
+        let (data, http) = try await send(request)
 
         switch http.statusCode {
         case 200:
@@ -259,20 +254,54 @@ actor GitHubClient {
             }
             return try decode(type, from: cached)
 
-        case 401:
-            throw GitHubError.unauthorized
-
-        case 403, 429:
-            if rateLimit.remaining == 0 {
-                throw GitHubError.rateLimited(rateLimit.reset)
-            }
-            throw GitHubError.forbidden(message(from: data))
-
-        case 404:
-            throw GitHubError.notFound(path)
-
         default:
-            throw GitHubError.http(http.statusCode, message(from: data))
+            throw failure(status: http.statusCode, path: path, data: data)
+        }
+    }
+
+    /// POST for the mutating endpoints; the responses carry no body worth reading.
+    private func post(path: String, accountId: String?) async throws {
+        let request = try makeRequest(path: path, method: "POST", accountId: accountId)
+        let (data, http) = try await send(request)
+        guard (200..<300).contains(http.statusCode) else {
+            throw failure(status: http.statusCode, path: path, data: data)
+        }
+    }
+
+    private func makeRequest(path: String, method: String, accountId: String?) throws -> URLRequest {
+        guard let token = tokenProvider(accountId), !token.isEmpty else { throw GitHubError.noToken }
+        guard let url = URL(string: "https://api.github.com" + path) else { throw GitHubError.badURL(path) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("CIDeck/1.0", forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw GitHubError.http(-1, "Invalid response")
+        }
+        captureRateLimit(from: http)
+        return (data, http)
+    }
+
+    private func failure(status: Int, path: String, data: Data) -> GitHubError {
+        switch status {
+        case 401:
+            return .unauthorized
+        case 403, 429:
+            if rateLimit.remaining == 0 { return .rateLimited(rateLimit.reset) }
+            return .forbidden(message(from: data))
+        case 404:
+            return .notFound(path)
+        default:
+            return .http(status, message(from: data))
         }
     }
 

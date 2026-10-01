@@ -52,7 +52,7 @@
 | **Read-only** | Tokens only need read access. CIDeck has no re-run or cancel actions. |
 | **English UI** | All interface strings and localization fallbacks are in English. |
 
-Click a run to open it on GitHub. Right-click for *Copy link* or *Copy commit SHA*. Click a repository name to collapse its group.
+Click a run to open it on GitHub. Right-click for *Copy link* or *Copy commit SHA*. Hover a finished run to reveal a small ↻ button that re-runs it; hold ⌥ while clicking (or use the right-click menu) to re-run only the failed jobs. Click a repository name to collapse its group.
 
 ## Menu bar icon
 
@@ -107,7 +107,7 @@ Paste a token and click **Add & Verify**. CIDeck calls `/user` and `/user/orgs` 
 
 | Token type | Required permissions |
 |---|---|
-| Fine-grained (`github_pat_…`) | Select the required repositories, then grant **Actions: Read-only** and **Metadata: Read-only**. |
+| Fine-grained (`github_pat_…`) | Select the required repositories, then grant **Actions: Read-only** and **Metadata: Read-only**. To use the re-run button, set Actions to **Read and write**. |
 | Classic (`ghp_…`) | Use the `repo` scope for private repositories or `public_repo` for public repositories. |
 
 You can add any number of tokens; each is stored as a separate Keychain item. A fine-grained token issued to an organization shows the **organization name** rather than the username that created it, because `/user` alone cannot distinguish those tokens.
@@ -200,7 +200,7 @@ Sources/CIDeck/
     NotificationService.swift  new-run notifications and GitHub links
   Views/
     PopoverView.swift          menu bar popover
-    RunRowView.swift           run row and progress bars
+    RunRowView.swift           run row, progress bars and re-run button
     SettingsView.swift         three configuration tabs
     MenuBarLabel.swift         menu bar icon
     CIMark.swift               vector “CI” mark with a rotating arc
@@ -225,6 +225,7 @@ docs/                          README images
 | List workflows | `GET /repos/{o}/{r}/actions/workflows` | Once per repository, then cached |
 | List runs | `GET /repos/{o}/{r}/actions/runs` | Every poll, with ETags |
 | Load jobs for progress | `GET /repos/{o}/{r}/actions/runs/{id}/jobs` | Active runs only |
+| Re-run a run | `POST /repos/{o}/{r}/actions/runs/{id}/rerun` (or `/rerun-failed-jobs`) | When the ↻ button is clicked |
 
 Personal tokens have a 5,000-request hourly limit. With three idle repositories polling every five seconds, nearly every unchanged request returns `304` and does not consume that limit.
 
@@ -242,7 +243,7 @@ Personal tokens have a 5,000-request hourly limit. With three idle repositories 
 
 ## Known limitations
 
-- **Read-only.** CIDeck cannot re-run, cancel, or display logs, so tokens only need read access.
+- **Mostly read-only.** CIDeck can re-run finished runs (which needs Actions write access) but cannot cancel runs or display logs; a read-only token works for everything else.
 - **ETA is an estimate.** Matrix size changes, runner queues, and cache misses can reduce accuracy.
 - **Cancelled runs are always hidden.** Most are superseded by a newer push and say little about workflow health.
 - macOS renders menu bar icons as templates, so **color may be ignored**; each state therefore uses a different shape.

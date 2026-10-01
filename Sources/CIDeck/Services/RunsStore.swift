@@ -16,6 +16,10 @@ final class RunsStore: ObservableObject {
     @Published private(set) var rateLimit = RateLimitInfo()
     /// Workflow catalog per repo id, used for names and the settings picker.
     @Published private(set) var workflowCatalog: [String: [GHWorkflow]] = [:]
+    /// Runs with a re-run request in flight, so the row can swap in a spinner.
+    @Published private(set) var rerunningIds: Set<Int> = []
+    /// Last failure from a user-triggered action; cleared when the user dismisses it.
+    @Published var actionError: String?
 
     private let settings: AppSettings
     private let client: GitHubClient
@@ -153,6 +157,34 @@ final class RunsStore: ObservableObject {
             baselines.removeAll()
             workflowCatalog.removeAll()
             refreshNow()
+        }
+    }
+
+    // MARK: - Actions
+
+    /// Asks GitHub to replay a finished run, then refreshes so it reappears as queued.
+    func rerun(_ item: RunItem, in repo: RepoConfig, failedJobsOnly: Bool = false) {
+        let runId = item.run.id
+        guard !DemoMode.isEnabled, item.canRerun, !rerunningIds.contains(runId) else { return }
+        rerunningIds.insert(runId)
+        let accountId = settings.resolvedAccountId(for: repo)
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.rerunningIds.remove(runId) }
+            do {
+                try await self.client.rerun(owner: repo.owner,
+                                            repo: repo.name,
+                                            runId: runId,
+                                            failedJobsOnly: failedJobsOnly,
+                                            accountId: accountId)
+                self.actionError = nil
+                // GitHub needs a beat before the run shows up again as queued.
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self.refreshNow()
+            } catch {
+                self.actionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 

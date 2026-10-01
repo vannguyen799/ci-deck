@@ -5,12 +5,16 @@ import SwiftUI
 @MainActor
 struct RunRowView: View {
     let item: RunItem
+    /// Owning repository, needed to address the re-run endpoint.
+    let repo: RepoConfig
     /// Reference time for elapsed/relative labels; ticks once a second for active runs.
     var now: Date = Date()
 
+    @EnvironmentObject private var store: RunsStore
     @State private var isHovering = false
 
     private var run: GHRun { item.run }
+    private var isRerunning: Bool { store.rerunningIds.contains(run.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -23,6 +27,8 @@ struct RunRowView: View {
                     .lineLimit(1)
 
                 Spacer(minLength: 6)
+
+                retryButton
 
                 Text(timingText)
                     .font(.system(size: 10, weight: .medium))
@@ -79,6 +85,13 @@ struct RunRowView: View {
         .onHover { isHovering = $0 }
         .onTapGesture { open() }
         .contextMenu {
+            if item.canRerun {
+                Button("Re-run workflow") { store.rerun(item, in: repo) }
+                if item.canRerunFailedJobs {
+                    Button("Re-run failed jobs") { store.rerun(item, in: repo, failedJobsOnly: true) }
+                }
+                Divider()
+            }
             Button("Open in GitHub") { open() }
             Button("Copy link") {
                 NSPasteboard.general.clearContents()
@@ -90,6 +103,34 @@ struct RunRowView: View {
             }
         }
         .help(tooltip)
+    }
+
+    /// Only shown on hover, so a resting row stays as quiet as it was before.
+    /// The slot keeps its width either way to avoid the timing label jumping.
+    @ViewBuilder
+    private var retryButton: some View {
+        if item.canRerun {
+            Group {
+                if isRerunning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.55)
+                        .frame(width: 18, height: 18)
+                } else {
+                    IconButton(systemImage: "arrow.clockwise",
+                               help: item.canRerunFailedJobs
+                                   ? "Re-run (hold Option: failed jobs only)"
+                                   : "Re-run workflow",
+                               size: 18) {
+                        store.rerun(item, in: repo,
+                                    failedJobsOnly: item.canRerunFailedJobs && NSEvent.modifierFlags.contains(.option))
+                    }
+                    .opacity(isHovering ? 1 : 0)
+                    .allowsHitTesting(isHovering)
+                }
+            }
+            .frame(width: 18, height: 18)
+        }
     }
 
     /// Elapsed time for active runs; total duration + age for finished ones.
@@ -147,14 +188,15 @@ struct RunRowView: View {
 @MainActor
 struct LiveRunRowView: View {
     let item: RunItem
+    let repo: RepoConfig
 
     var body: some View {
         if item.state.isActive {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                RunRowView(item: item, now: context.date)
+                RunRowView(item: item, repo: repo, now: context.date)
             }
         } else {
-            RunRowView(item: item)
+            RunRowView(item: item, repo: repo)
         }
     }
 }
